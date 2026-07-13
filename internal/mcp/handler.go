@@ -186,10 +186,65 @@ func (h *Handler) writeError(w http.ResponseWriter, id json.RawMessage, code int
 
 func tools() []map[string]any {
 	return []map[string]any{
-		{"name": "tavily_search", "description": "Search the web with Tavily.", "inputSchema": map[string]any{"type": "object"}},
-		{"name": "tavily_extract", "description": "Extract web content with Tavily.", "inputSchema": map[string]any{"type": "object"}},
-		{"name": "tavily_crawl", "description": "Crawl a site with Tavily.", "inputSchema": map[string]any{"type": "object"}},
-		{"name": "tavily_map", "description": "Map a site with Tavily.", "inputSchema": map[string]any{"type": "object"}},
-		{"name": "tavily_research", "description": "Perform comprehensive web research and return the completed cited report. TvLink streams Tavily progress and waits for the final result.", "inputSchema": map[string]any{"type": "object"}},
+		{"name": "tavily_search", "description": "Search the web for current information. Returns ranked snippets and source URLs.", "inputSchema": objectSchema(map[string]any{
+			"query": stringSchema("The search query."), "max_results": integerSchema("Maximum results to return.", 5),
+			"search_depth":   enumSchema("Search relevance and cost tier.", "basic", "basic", "advanced", "fast", "ultra-fast"),
+			"topic":          enumSchema("Search topic.", "general", "general", "news", "finance"),
+			"time_range":     enumSchema("Optional recency filter.", "", "day", "week", "month", "year"),
+			"include_answer": boolSchema("Include a generated answer.", false), "include_raw_content": boolSchema("Include cleaned source content.", false),
+			"include_images": boolSchema("Include related images.", false), "include_image_descriptions": boolSchema("Describe included images.", false),
+			"include_favicon": boolSchema("Include source favicon URLs.", false), "include_domains": stringArraySchema("Only search these domains."),
+			"exclude_domains": stringArraySchema("Exclude these domains."), "country": stringSchema("Optional full country name for general searches."),
+		}, "query")},
+		{"name": "tavily_extract", "description": "Extract clean markdown or text from one or more known URLs.", "inputSchema": objectSchema(map[string]any{
+			"urls": stringArraySchema("URLs to extract."), "extract_depth": enumSchema("Extraction depth.", "basic", "basic", "advanced"),
+			"format": enumSchema("Returned content format.", "markdown", "markdown", "text"), "include_images": boolSchema("Include page images.", false),
+			"include_favicon": boolSchema("Include favicon URLs.", false), "query": stringSchema("Optional query for relevance ranking."),
+		}, "urls")},
+		{"name": "tavily_crawl", "description": "Crawl a website from a root URL and extract discovered pages.", "inputSchema": objectSchema(siteTraversalProperties(true), "url")},
+		{"name": "tavily_map", "description": "Discover a website's URL structure without extracting page content.", "inputSchema": objectSchema(siteTraversalProperties(false), "url")},
+		{"name": "tavily_research", "description": "Perform comprehensive multi-source research. Returns the completed cited report; TvLink streams progress when the client supports it.", "inputSchema": objectSchema(map[string]any{
+			"input":           stringSchema("A complete research question or task. This field is required; do not use query."),
+			"model":           enumSchema("Research breadth. mini suits narrow tasks; pro suits broad multi-angle tasks.", "auto", "mini", "pro", "auto"),
+			"output_length":   enumSchema("Target report size.", "standard", "short", "standard", "long"),
+			"citation_format": enumSchema("Citation style.", "numbered", "numbered", "mla", "apa", "chicago"),
+			"include_domains": stringArraySchema("Preferred source domains."), "exclude_domains": stringArraySchema("Blocked source domains."),
+			"output_schema": map[string]any{"type": "object", "description": "Optional JSON Schema for structured report content."},
+		}, "input")},
 	}
+}
+
+func objectSchema(properties map[string]any, required ...string) map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
+}
+
+func stringSchema(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+func boolSchema(description string, defaultValue bool) map[string]any {
+	return map[string]any{"type": "boolean", "description": description, "default": defaultValue}
+}
+func integerSchema(description string, defaultValue int) map[string]any {
+	return map[string]any{"type": "integer", "description": description, "default": defaultValue, "minimum": 1}
+}
+func stringArraySchema(description string) map[string]any {
+	return map[string]any{"type": "array", "description": description, "items": map[string]any{"type": "string"}, "default": []string{}}
+}
+func enumSchema(description, defaultValue string, values ...string) map[string]any {
+	return map[string]any{"type": "string", "description": description, "default": defaultValue, "enum": values}
+}
+
+func siteTraversalProperties(includeExtraction bool) map[string]any {
+	properties := map[string]any{
+		"url": stringSchema("The root URL."), "max_depth": integerSchema("Maximum link depth.", 1), "max_breadth": integerSchema("Maximum links followed per page.", 20),
+		"limit": integerSchema("Maximum URLs to process.", 50), "instructions": stringSchema("Optional natural-language page selection instructions."),
+		"select_paths": stringArraySchema("Regular expressions selecting URL paths."), "select_domains": stringArraySchema("Regular expressions selecting domains."),
+		"allow_external": boolSchema("Allow external links in results.", true),
+	}
+	if includeExtraction {
+		properties["extract_depth"] = enumSchema("Extraction depth.", "basic", "basic", "advanced")
+		properties["format"] = enumSchema("Extracted content format.", "markdown", "markdown", "text")
+		properties["include_favicon"] = boolSchema("Include favicon URLs.", false)
+	}
+	return properties
 }

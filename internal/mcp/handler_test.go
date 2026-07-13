@@ -27,3 +27,34 @@ func TestHandlerListsToolsAfterAuthentication(t *testing.T) {
 		t.Fatalf("result is missing: %s", response.Body.String())
 	}
 }
+
+func TestToolsExposeRequiredResearchInputSchema(t *testing.T) {
+	var research map[string]any
+	for _, tool := range tools() {
+		if tool["name"] == "tavily_research" {
+			research = tool
+			break
+		}
+	}
+	if research == nil {
+		t.Fatal("tavily_research is missing")
+	}
+	schema := research["inputSchema"].(map[string]any)
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("research input schema does not define properties")
+	}
+	if _, ok := properties["input"]; !ok {
+		t.Fatal("research input schema does not define input")
+	}
+	required, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatal("research input schema does not define required")
+	}
+	if len(required) != 1 || required[0] != "input" {
+		t.Errorf("research required = %#v, want [input]", required)
+	}
+	if schema["additionalProperties"] != false {
+		t.Errorf("additionalProperties = %v, want false", schema["additionalProperties"])
+	}
+}
