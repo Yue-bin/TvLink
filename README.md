@@ -38,7 +38,7 @@ sudo install -o root -g root -m 0755 tvlink /opt/tvlink/tvlink
 sudo install -o root -g tvlink -m 0640 tvlink.example.toml /opt/tvlink/tvlink.toml
 sudoedit /opt/tvlink/tvlink.toml
 
-sudo install -o root -g root -m 0644 deploy/tvlink.service /etc/systemd/system/tvlink.service
+sudo install -o root -g root -m 0644 tvlink.service /etc/systemd/system/tvlink.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now tvlink
 sudo systemctl status tvlink
