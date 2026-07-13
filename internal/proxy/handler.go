@@ -233,6 +233,20 @@ func supportedPostPath(path string) bool {
 }
 
 func estimate(path string, body []byte) float64 {
+	if path == "/research" {
+		var request struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(body, &request) == nil {
+			switch request.Model {
+			case "mini":
+				return 10
+			case "pro":
+				return 40
+			}
+		}
+		return 30
+	}
 	if path == "/search" && bytes.Contains(body, []byte(`"search_depth":"advanced"`)) {
 		return 2
 	}

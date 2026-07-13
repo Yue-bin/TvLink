@@ -129,3 +129,24 @@ func TestResearchStatusRemovesExpiredMapping(t *testing.T) {
 		t.Errorf("upstream calls = %d, want 1", upstreamCalls)
 	}
 }
+
+func TestEstimateUsesResearchModelDefaults(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want float64
+	}{
+		{name: "mini", body: `{"model":"mini"}`, want: 10},
+		{name: "pro", body: `{"model":"pro"}`, want: 40},
+		{name: "auto", body: `{"model":"auto"}`, want: 30},
+		{name: "omitted", body: `{}`, want: 30},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := estimate("/research", []byte(test.body)); got != test.want {
+				t.Fatalf("estimate() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
