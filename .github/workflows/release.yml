@@ -41,6 +41,9 @@ jobs:
           cp tvlink${{ matrix.ext }} "$artifact/"
           cp tvlink.example.toml "$artifact/"
           cp README.md "$artifact/"
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            cp deploy/tvlink.service "$artifact/"
+          fi
           if [ "${{ matrix.pack }}" = "tar.gz" ]; then
             tar czf "${artifact}.tar.gz" "$artifact"
           else
