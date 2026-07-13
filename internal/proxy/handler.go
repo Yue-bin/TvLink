@@ -3,9 +3,11 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"tvlink/internal/pool"
@@ -13,11 +15,13 @@ import (
 
 // Handler authenticates callers and forwards supported Tavily requests.
 type Handler struct {
-	clientKey string
-	baseURL   string
-	http      *http.Client
-	pool      *pool.Pool
-	maxBody   int64
+	clientKey  string
+	baseURL    string
+	http       *http.Client
+	pool       *pool.Pool
+	maxBody    int64
+	researchMu sync.Mutex
+	research   map[string]string
 }
 
 // New creates a proxy handler.
@@ -28,6 +32,7 @@ func New(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *po
 		http:      httpClient,
 		pool:      keyPool,
 		maxBody:   maxBody,
+		research:  make(map[string]string),
 	}
 }
 
@@ -35,6 +40,10 @@ func New(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *po
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer "+h.clientKey {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/research/") {
+		h.serveResearchStatus(w, r)
 		return
 	}
 	if r.Method != http.MethodPost || !supportedPostPath(r.URL.Path) {
@@ -77,12 +86,63 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.pool.Resolve(lease, response.StatusCode, retryAfter(response.Header.Get("Retry-After")), time.Now())
 		defer response.Body.Close()
+		if r.URL.Path == "/research" && !strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
+			payload, readErr := io.ReadAll(response.Body)
+			if readErr != nil {
+				http.Error(w, "read research response", http.StatusBadGateway)
+				return
+			}
+			var result struct {
+				RequestID string `json:"request_id"`
+			}
+			if json.Unmarshal(payload, &result) == nil && result.RequestID != "" {
+				h.researchMu.Lock()
+				h.research[result.RequestID] = lease.Key.Name
+				h.researchMu.Unlock()
+			}
+			copyHeader(w.Header(), response.Header)
+			w.WriteHeader(response.StatusCode)
+			_, _ = w.Write(payload)
+			return
+		}
 		copyHeader(w.Header(), response.Header)
 		w.WriteHeader(response.StatusCode)
 		_, _ = io.Copy(w, response.Body)
 		return
 	}
 	http.Error(w, "no Tavily key is currently available", http.StatusServiceUnavailable)
+}
+
+func (h *Handler) serveResearchStatus(w http.ResponseWriter, r *http.Request) {
+	requestID := strings.TrimPrefix(r.URL.Path, "/research/")
+	h.researchMu.Lock()
+	keyName, ok := h.research[requestID]
+	h.researchMu.Unlock()
+	if !ok {
+		http.Error(w, "research request not found", http.StatusNotFound)
+		return
+	}
+	key, ok := h.pool.Key(keyName)
+	if !ok {
+		http.Error(w, "research key unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodGet, h.baseURL+r.URL.Path, nil)
+	if err != nil {
+		http.Error(w, "build upstream request", http.StatusBadGateway)
+		return
+	}
+	copyHeader(upstream.Header, r.Header)
+	upstream.Header.Set("Authorization", "Bearer "+key.APIKey)
+	response, err := h.http.Do(upstream)
+	if err != nil {
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	copyHeader(w.Header(), response.Header)
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
 }
 
 func supportedPostPath(path string) bool {

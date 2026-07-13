@@ -112,6 +112,18 @@ func (p *Pool) UpdateUsage(name string, usage Usage, fetchedAt time.Time) {
 	}
 }
 
+// Key returns one configured credential by name.
+func (p *Pool) Key(name string) (Key, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	state, ok := p.keys[name]
+	if !ok {
+		return Key{}, false
+	}
+	return state.key, true
+}
+
 // Select picks a key by weight and reserves the estimated upstream credit cost.
 func (p *Pool) Select(now time.Time, estimate float64) (Lease, error) {
 	p.mu.Lock()

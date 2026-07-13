@@ -49,3 +49,34 @@ func TestHandlerReplacesUpstreamAuthorization(t *testing.T) {
 		t.Errorf("body = %q", response.Body.String())
 	}
 }
+
+func TestResearchStatusUsesCreatingKey(t *testing.T) {
+	var authorization string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"request_id":"research-1","status":"pending"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"request_id":"research-1","status":"completed"}`))
+	}))
+	defer upstream.Close()
+
+	p := pool.New([]pool.Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	p.UpdateUsage("one", pool.Usage{Limit: 100}, time.Now())
+	handler := New("tlk-client", upstream.URL, upstream.Client(), p, 1024)
+	create := httptest.NewRequest(http.MethodPost, "/research", bytes.NewBufferString(`{"input":"test"}`))
+	create.Header.Set("Authorization", "Bearer tlk-client")
+	handler.ServeHTTP(httptest.NewRecorder(), create)
+
+	status := httptest.NewRequest(http.MethodGet, "/research/research-1", nil)
+	status.Header.Set("Authorization", "Bearer tlk-client")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, status)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if authorization != "Bearer tvly-one" {
+		t.Errorf("status authorization = %q", authorization)
+	}
+}
