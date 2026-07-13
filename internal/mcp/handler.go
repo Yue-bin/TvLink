@@ -2,14 +2,17 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 )
 
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
 }
 
 // Handler implements a minimal Streamable HTTP MCP server.
@@ -48,9 +51,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	case "tools/list":
 		h.writeResult(w, payload.ID, map[string]any{"tools": tools()})
+	case "tools/call":
+		h.callTool(w, r, payload)
 	default:
 		h.writeError(w, payload.ID, -32601, "method not found")
 	}
+}
+
+func (h *Handler) callTool(w http.ResponseWriter, r *http.Request, payload request) {
+	var params struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(payload.Params, &params); err != nil {
+		h.writeError(w, payload.ID, -32602, "invalid tool parameters")
+		return
+	}
+	path, ok := map[string]string{
+		"tavily_search":   "/search",
+		"tavily_extract":  "/extract",
+		"tavily_crawl":    "/crawl",
+		"tavily_map":      "/map",
+		"tavily_research": "/research",
+	}[params.Name]
+	if !ok {
+		h.writeError(w, payload.ID, -32602, "unknown tool")
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, path, bytes.NewReader(params.Arguments))
+	if err != nil {
+		h.writeError(w, payload.ID, -32603, "build proxy request")
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+h.clientKey)
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	h.proxy.ServeHTTP(response, req)
+	h.writeResult(w, payload.ID, map[string]any{
+		"content": []map[string]string{{"type": "text", "text": response.Body.String()}},
+		"isError": response.Code >= http.StatusBadRequest,
+	})
 }
 
 func (h *Handler) writeResult(w http.ResponseWriter, id json.RawMessage, result any) {
