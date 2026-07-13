@@ -18,7 +18,7 @@ func TestRefreshUsageUpdatesPool(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tvly-one" {
 			t.Errorf("Authorization = %q", got)
 		}
-		_, _ = w.Write([]byte(`{"key":{"usage":12,"limit":100}}`))
+		_, _ = w.Write([]byte(`{"key":{"usage":12,"limit":null},"account":{"plan_usage":12,"plan_limit":100,"paygo_usage":0,"paygo_limit":null}}`))
 	}))
 	defer server.Close()
 

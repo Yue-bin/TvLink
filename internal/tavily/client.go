@@ -19,6 +19,12 @@ type usageResponse struct {
 		Usage int64  `json:"usage"`
 		Limit *int64 `json:"limit"`
 	} `json:"key"`
+	Account struct {
+		PlanUsage  int64  `json:"plan_usage"`
+		PlanLimit  *int64 `json:"plan_limit"`
+		PaygoUsage int64  `json:"paygo_usage"`
+		PaygoLimit *int64 `json:"paygo_limit"`
+	} `json:"account"`
 }
 
 type retryAfterError struct {
@@ -88,11 +94,29 @@ func (c *Client) RefreshUsage(ctx context.Context, name string) error {
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		return fmt.Errorf("decode usage response: %w", err)
 	}
-	if payload.Key.Limit == nil {
-		return fmt.Errorf("usage response for %q has unlimited key", name)
+	limit, used, err := effectiveUsage(payload)
+	if err != nil {
+		return fmt.Errorf("usage response for %q: %w", name, err)
 	}
-	c.pool.UpdateUsage(name, pool.Usage{Limit: *payload.Key.Limit, Used: payload.Key.Usage}, time.Now())
+	c.pool.UpdateUsage(name, pool.Usage{Limit: limit, Used: used}, time.Now())
 	return nil
+}
+
+func effectiveUsage(payload usageResponse) (int64, int64, error) {
+	if payload.Account.PlanLimit == nil {
+		return 0, 0, fmt.Errorf("account plan_limit is missing")
+	}
+	accountLimit := *payload.Account.PlanLimit
+	if payload.Account.PaygoLimit != nil {
+		accountLimit += *payload.Account.PaygoLimit
+	}
+	accountUsage := payload.Account.PlanUsage + payload.Account.PaygoUsage
+	if payload.Key.Limit == nil {
+		return accountLimit, accountUsage, nil
+	}
+	keyRemaining := max(0, *payload.Key.Limit-payload.Key.Usage)
+	accountRemaining := max(0, accountLimit-accountUsage)
+	return min(keyRemaining, accountRemaining), 0, nil
 }
 
 func parseRetryAfter(value string, now time.Time) time.Duration {
