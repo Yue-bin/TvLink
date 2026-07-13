@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,10 +21,20 @@ import (
 	"tvlink/internal/tavily"
 )
 
+// version is overridden by release builds with -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
-	configPath := flag.String("config", "tvlink.toml", "TOML configuration file")
-	flag.Parse()
-	settings, err := config.Load(*configPath)
+	configPath, showVersion, err := parseArguments(os.Args[1:])
+	if err != nil {
+		slog.Error("parse command-line arguments", "error", err)
+		os.Exit(2)
+	}
+	if showVersion {
+		writeVersion(os.Stdout)
+		return
+	}
+	settings, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("load configuration", "error", err)
 		os.Exit(1)
@@ -66,6 +78,21 @@ func main() {
 		slog.Error("serve", "error", err)
 		os.Exit(1)
 	}
+}
+
+func parseArguments(args []string) (string, bool, error) {
+	flags := flag.NewFlagSet("tvlink", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configPath := flags.String("config", "tvlink.toml", "TOML configuration file")
+	showVersion := flags.Bool("version", false, "print version and exit")
+	if err := flags.Parse(args); err != nil {
+		return "", false, err
+	}
+	return *configPath, *showVersion, nil
+}
+
+func writeVersion(writer io.Writer) {
+	_, _ = fmt.Fprintf(writer, "TvLink %s\n", version)
 }
 
 func refreshLoop(ctx context.Context, client *tavily.Client, keys []pool.Key, interval time.Duration) {

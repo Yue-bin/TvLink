@@ -21,6 +21,12 @@ TvLink 是一个 Tavily API Key 池服务，向客户端提供统一的 REST 与
 
 Release 提供 `win_amd64` 和 `linux_amd64` 预编译包。下载并解压与目标平台匹配的包即可运行；Windows 直接执行 `tvlink.exe -config tvlink.toml`。
 
+使用 `tvlink --version` 查看版本。Release 构建通过 `-ldflags` 注入标签，例如：
+
+```bash
+go build -ldflags "-X main.version=v1.2.3" -o tvlink ./cmd/tvlink
+```
+
 以下以 Linux `linux_amd64` 包部署到 `/opt/tvlink` 为例：
 
 ```bash
