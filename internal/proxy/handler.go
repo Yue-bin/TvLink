@@ -3,7 +3,9 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -22,6 +24,41 @@ type Handler struct {
 	maxBody    int64
 	researchMu sync.Mutex
 	research   map[string]string
+}
+
+// StreamResearch starts a Tavily SSE research request with a selected key.
+func (h *Handler) StreamResearch(ctx context.Context, body []byte) (*http.Response, error) {
+	var arguments map[string]json.RawMessage
+	if err := json.Unmarshal(body, &arguments); err != nil {
+		return nil, fmt.Errorf("decode research arguments: %w", err)
+	}
+	arguments["stream"] = json.RawMessage("true")
+	payload, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, fmt.Errorf("encode streaming research arguments: %w", err)
+	}
+	lease, err := h.pool.Select(time.Now(), estimate("/research", payload))
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.baseURL+"/research", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build streaming research request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+lease.Key.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := h.http.Do(req)
+	if err != nil {
+		h.pool.Resolve(lease, http.StatusInternalServerError, 0, time.Now())
+		return nil, fmt.Errorf("send streaming research request: %w", err)
+	}
+	h.pool.Resolve(lease, response.StatusCode, retryAfter(response.Header.Get("Retry-After")), time.Now())
+	if response.StatusCode != http.StatusOK {
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		return nil, fmt.Errorf("research stream returned %s: %s", response.Status, body)
+	}
+	return response, nil
 }
 
 // New creates a proxy handler.
