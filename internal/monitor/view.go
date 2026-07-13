@@ -60,11 +60,16 @@ func newPageView(snapshots []pool.Snapshot, refreshInterval time.Duration, _ tim
 		if snapshot.Weight > 0 {
 			view.AvailableKeys++
 		}
+		metrics := newProgressView(snapshot.RealUsage, snapshot.EstimatedUsage, snapshot.Limit)
+		if metrics.Unavailable {
+			metrics.UsageText = "尚无用量数据"
+			metrics.AriaLabel = "用量数据尚不可用"
+		}
 		view.Rows = append(view.Rows, keyView{
 			Name:       snapshot.Name,
 			State:      string(snapshot.State),
 			StateClass: "state-" + string(snapshot.State),
-			Metrics:    newProgressView(snapshot.RealUsage, snapshot.EstimatedUsage, snapshot.Limit),
+			Metrics:    metrics,
 			UpdatedAt:  formatTimestamp(snapshot.RealUsageAt),
 			Remaining:  formatFloat(snapshot.Remaining),
 			Weight:     formatFloat(snapshot.Weight),

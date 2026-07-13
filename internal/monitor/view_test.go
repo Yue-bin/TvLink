@@ -56,6 +56,9 @@ func TestNewPageViewHandlesUnavailableAndClampedUsage(t *testing.T) {
 	if !view.Rows[1].Metrics.Unavailable || view.Rows[1].UpdatedAt != "--" {
 		t.Errorf("pending row = unavailable %v, updated %q", view.Rows[1].Metrics.Unavailable, view.Rows[1].UpdatedAt)
 	}
+	if view.Rows[1].Metrics.UsageText != "尚无用量数据" {
+		t.Errorf("pending usage = %q", view.Rows[1].Metrics.UsageText)
+	}
 }
 
 func TestNewPageViewRendersEmptyState(t *testing.T) {
