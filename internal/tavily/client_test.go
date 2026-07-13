@@ -51,3 +51,26 @@ func TestRefreshUsageReturnsRetryAfter(t *testing.T) {
 		t.Fatalf("RetryAfter() = (%s, %t), want (1m0s, true)", retryAfter, ok)
 	}
 }
+
+func TestEffectiveUsageUsesTighterKeyLimit(t *testing.T) {
+	keyLimit := int64(100)
+	planLimit := int64(1_000)
+	limit, used, err := effectiveUsage(usageResponse{
+		Key: struct {
+			Usage int64  "json:\"usage\""
+			Limit *int64 "json:\"limit\""
+		}{Usage: 90, Limit: &keyLimit},
+		Account: struct {
+			PlanUsage  int64  "json:\"plan_usage\""
+			PlanLimit  *int64 "json:\"plan_limit\""
+			PaygoUsage int64  "json:\"paygo_usage\""
+			PaygoLimit *int64 "json:\"paygo_limit\""
+		}{PlanUsage: 100, PlanLimit: &planLimit},
+	})
+	if err != nil {
+		t.Fatalf("effectiveUsage() error = %v", err)
+	}
+	if limit != 100 || used != 90 {
+		t.Errorf("effectiveUsage() = (%d, %d), want (100, 90)", limit, used)
+	}
+}

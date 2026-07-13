@@ -116,7 +116,10 @@ func effectiveUsage(payload usageResponse) (int64, int64, error) {
 	}
 	keyRemaining := max(0, *payload.Key.Limit-payload.Key.Usage)
 	accountRemaining := max(0, accountLimit-accountUsage)
-	return min(keyRemaining, accountRemaining), 0, nil
+	if keyRemaining <= accountRemaining {
+		return *payload.Key.Limit, payload.Key.Usage, nil
+	}
+	return accountLimit, accountUsage, nil
 }
 
 func parseRetryAfter(value string, now time.Time) time.Duration {
