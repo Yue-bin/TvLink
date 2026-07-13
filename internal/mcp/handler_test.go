@@ -9,7 +9,7 @@ import (
 )
 
 func TestHandlerListsToolsAfterAuthentication(t *testing.T) {
-	handler := New("tlk-client", http.NotFoundHandler())
+	handler := New("tlk-client", "1.2.3", http.NotFoundHandler())
 	body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	request := httptest.NewRequest(http.MethodPost, "/mcp", body)
 	request.Header.Set("Authorization", "Bearer tlk-client")
@@ -25,6 +25,29 @@ func TestHandlerListsToolsAfterAuthentication(t *testing.T) {
 	}
 	if payload["result"] == nil {
 		t.Fatalf("result is missing: %s", response.Body.String())
+	}
+}
+
+func TestInitializeReportsConfiguredVersion(t *testing.T) {
+	handler := New("tlk-client", "1.2.3", http.NotFoundHandler())
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	request.Header.Set("Authorization", "Bearer tlk-client")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	var payload struct {
+		Result struct {
+			ServerInfo struct {
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Result.ServerInfo.Version != "1.2.3" {
+		t.Errorf("serverInfo.version = %q, want %q", payload.Result.ServerInfo.Version, "1.2.3")
 	}
 }
 

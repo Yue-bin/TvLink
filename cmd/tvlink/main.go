@@ -57,7 +57,7 @@ func main() {
 	rest := proxy.New(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, int64(settings.RequestBodyLimit), settings.ResearchMappingTTL)
 	mux := http.NewServeMux()
 	mux.Handle("/", monitor.New(keyPool, settings.MonitorRefreshInterval))
-	mux.Handle("/mcp", mcp.New(settings.TvLinkAPIKey, rest))
+	mux.Handle("/mcp", mcp.New(settings.TvLinkAPIKey, version, rest))
 	mux.Handle("/search", rest)
 	mux.Handle("/extract", rest)
 	mux.Handle("/crawl", rest)

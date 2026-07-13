@@ -23,12 +23,13 @@ type request struct {
 // Handler implements a minimal Streamable HTTP MCP server.
 type Handler struct {
 	clientKey string
+	version   string
 	proxy     http.Handler
 }
 
 // New creates an MCP handler backed by a Tavily REST proxy.
-func New(clientKey string, proxy http.Handler) *Handler {
-	return &Handler{clientKey: clientKey, proxy: proxy}
+func New(clientKey, version string, proxy http.Handler) *Handler {
+	return &Handler{clientKey: clientKey, version: version, proxy: proxy}
 }
 
 // ServeHTTP serves MCP JSON-RPC requests.
@@ -52,7 +53,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeResult(w, payload.ID, map[string]any{
 			"protocolVersion": "2025-03-26",
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]string{"name": "TvLink", "version": "0.1.0"},
+			"serverInfo":      map[string]string{"name": "TvLink", "version": h.version},
 		})
 	case "tools/list":
 		h.writeResult(w, payload.ID, map[string]any{"tools": tools()})
