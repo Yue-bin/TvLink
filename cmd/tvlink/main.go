@@ -54,7 +54,7 @@ func main() {
 	}
 	go refreshLoop(ctx, usageClient, keys, settings.UsageRefreshInterval)
 
-	rest := proxy.New(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, int64(settings.RequestBodyLimit))
+	rest := proxy.New(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, int64(settings.RequestBodyLimit), settings.ResearchMappingTTL)
 	mux := http.NewServeMux()
 	mux.Handle("/", monitor.New(keyPool, settings.MonitorRefreshInterval))
 	mux.Handle("/mcp", mcp.New(settings.TvLinkAPIKey, rest))

@@ -17,13 +17,19 @@ import (
 
 // Handler authenticates callers and forwards supported Tavily requests.
 type Handler struct {
-	clientKey  string
-	baseURL    string
-	http       *http.Client
-	pool       *pool.Pool
-	maxBody    int64
-	researchMu sync.Mutex
-	research   map[string]string
+	clientKey   string
+	baseURL     string
+	http        *http.Client
+	pool        *pool.Pool
+	maxBody     int64
+	researchTTL time.Duration
+	researchMu  sync.Mutex
+	research    map[string]researchMapping
+}
+
+type researchMapping struct {
+	keyName   string
+	expiresAt time.Time
 }
 
 // StreamResearch starts a Tavily SSE research request with a selected key.
@@ -62,14 +68,15 @@ func (h *Handler) StreamResearch(ctx context.Context, body []byte) (*http.Respon
 }
 
 // New creates a proxy handler.
-func New(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, maxBody int64) *Handler {
+func New(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, maxBody int64, researchTTL time.Duration) *Handler {
 	return &Handler{
-		clientKey: clientKey,
-		baseURL:   strings.TrimRight(upstreamBaseURL, "/"),
-		http:      httpClient,
-		pool:      keyPool,
-		maxBody:   maxBody,
-		research:  make(map[string]string),
+		clientKey:   clientKey,
+		baseURL:     strings.TrimRight(upstreamBaseURL, "/"),
+		http:        httpClient,
+		pool:        keyPool,
+		maxBody:     maxBody,
+		researchTTL: researchTTL,
+		research:    make(map[string]researchMapping),
 	}
 }
 
@@ -133,9 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				RequestID string `json:"request_id"`
 			}
 			if json.Unmarshal(payload, &result) == nil && result.RequestID != "" {
-				h.researchMu.Lock()
-				h.research[result.RequestID] = lease.Key.Name
-				h.researchMu.Unlock()
+				h.storeResearchMapping(result.RequestID, lease.Key.Name, time.Now())
 			}
 			copyHeader(w.Header(), response.Header)
 			w.WriteHeader(response.StatusCode)
@@ -152,9 +157,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveResearchStatus(w http.ResponseWriter, r *http.Request) {
 	requestID := strings.TrimPrefix(r.URL.Path, "/research/")
-	h.researchMu.Lock()
-	keyName, ok := h.research[requestID]
-	h.researchMu.Unlock()
+	keyName, ok := h.researchKey(requestID, time.Now())
 	if !ok {
 		http.Error(w, "research request not found", http.StatusNotFound)
 		return
@@ -180,6 +183,44 @@ func (h *Handler) serveResearchStatus(w http.ResponseWriter, r *http.Request) {
 	copyHeader(w.Header(), response.Header)
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, response.Body)
+}
+
+func (h *Handler) storeResearchMapping(requestID, keyName string, now time.Time) {
+	h.researchMu.Lock()
+	defer h.researchMu.Unlock()
+	for id, mapping := range h.research {
+		if !now.Before(mapping.expiresAt) {
+			delete(h.research, id)
+		}
+	}
+	mapping := researchMapping{keyName: keyName, expiresAt: now.Add(h.researchTTL)}
+	h.research[requestID] = mapping
+	time.AfterFunc(h.researchTTL, func() {
+		h.removeResearchMapping(requestID, mapping.expiresAt)
+	})
+}
+
+func (h *Handler) removeResearchMapping(requestID string, expiresAt time.Time) {
+	h.researchMu.Lock()
+	defer h.researchMu.Unlock()
+	mapping, ok := h.research[requestID]
+	if ok && mapping.expiresAt.Equal(expiresAt) {
+		delete(h.research, requestID)
+	}
+}
+
+func (h *Handler) researchKey(requestID string, now time.Time) (string, bool) {
+	h.researchMu.Lock()
+	defer h.researchMu.Unlock()
+	mapping, ok := h.research[requestID]
+	if !ok {
+		return "", false
+	}
+	if !now.Before(mapping.expiresAt) {
+		delete(h.research, requestID)
+		return "", false
+	}
+	return mapping.keyName, true
 }
 
 func supportedPostPath(path string) bool {
