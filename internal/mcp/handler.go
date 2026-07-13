@@ -100,10 +100,16 @@ func (h *Handler) callTool(w http.ResponseWriter, r *http.Request, payload reque
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	h.proxy.ServeHTTP(response, req)
-	h.writeResult(w, payload.ID, map[string]any{
+	body := response.Body.Bytes()
+	result := map[string]any{
 		"content": []map[string]string{{"type": "text", "text": response.Body.String()}},
 		"isError": response.Code >= http.StatusBadRequest,
-	})
+	}
+	var structuredContent map[string]any
+	if json.Unmarshal(body, &structuredContent) == nil && structuredContent != nil {
+		result["structuredContent"] = structuredContent
+	}
+	h.writeResult(w, payload.ID, result)
 }
 
 type researchStreamer interface {
