@@ -5,9 +5,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,12 +121,9 @@ func (h *Handler) streamResearch(w http.ResponseWriter, r *http.Request, id json
 		return
 	}
 	defer response.Body.Close()
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	flusher, _ := w.(http.Flusher)
 	var content strings.Builder
-	var sources any
 	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -154,26 +151,15 @@ func (h *Handler) streamResearch(w http.ResponseWriter, r *http.Request, id json
 				content.Write(delta.Content)
 			}
 		}
-		if delta.Sources != nil {
-			sources = delta.Sources
-		}
-		if delta.ToolCalls != nil && progressToken != nil {
-			h.writeSSE(w, map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progressToken": progressToken, "progress": 0, "message": "Tavily research is in progress"}})
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
+		_ = delta.Sources
+		_ = delta.ToolCalls
+		_ = progressToken
 	}
 	if err := scanner.Err(); err != nil {
-		h.writeSSE(w, map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "error": map[string]any{"code": -32603, "message": fmt.Sprintf("read research stream: %v", err)}})
+		h.writeError(w, id, -32603, fmt.Sprintf("read research stream: %v", err))
 		return
 	}
-	h.writeSSE(w, map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "result": map[string]any{"content": []map[string]any{{"type": "text", "text": content.String()}, {"type": "resource", "resource": map[string]any{"sources": sources}}}}})
-}
-
-func (h *Handler) writeSSE(w io.Writer, payload any) {
-	encoded, _ := json.Marshal(payload)
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", encoded)
+	h.writeResult(w, id, map[string]any{"content": []map[string]string{{"type": "text", "text": content.String()}}})
 }
 
 func (h *Handler) writeResult(w http.ResponseWriter, id json.RawMessage, result any) {
@@ -184,67 +170,17 @@ func (h *Handler) writeError(w http.ResponseWriter, id json.RawMessage, code int
 	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "error": map[string]any{"code": code, "message": message}})
 }
 
+//go:embed tavily_tools.json
+var officialToolsJSON []byte
+
 func tools() []map[string]any {
-	return []map[string]any{
-		{"name": "tavily_search", "description": "Search the web for current information. Returns ranked snippets and source URLs.", "inputSchema": objectSchema(map[string]any{
-			"query": stringSchema("The search query."), "max_results": integerSchema("Maximum results to return.", 5),
-			"search_depth":   enumSchema("Search relevance and cost tier.", "basic", "basic", "advanced", "fast", "ultra-fast"),
-			"topic":          enumSchema("Search topic.", "general", "general", "news", "finance"),
-			"time_range":     enumSchema("Optional recency filter.", "", "day", "week", "month", "year"),
-			"include_answer": boolSchema("Include a generated answer.", false), "include_raw_content": boolSchema("Include cleaned source content.", false),
-			"include_images": boolSchema("Include related images.", false), "include_image_descriptions": boolSchema("Describe included images.", false),
-			"include_favicon": boolSchema("Include source favicon URLs.", false), "include_domains": stringArraySchema("Only search these domains."),
-			"exclude_domains": stringArraySchema("Exclude these domains."), "country": stringSchema("Optional full country name for general searches."),
-		}, "query")},
-		{"name": "tavily_extract", "description": "Extract clean markdown or text from one or more known URLs.", "inputSchema": objectSchema(map[string]any{
-			"urls": stringArraySchema("URLs to extract."), "extract_depth": enumSchema("Extraction depth.", "basic", "basic", "advanced"),
-			"format": enumSchema("Returned content format.", "markdown", "markdown", "text"), "include_images": boolSchema("Include page images.", false),
-			"include_favicon": boolSchema("Include favicon URLs.", false), "query": stringSchema("Optional query for relevance ranking."),
-		}, "urls")},
-		{"name": "tavily_crawl", "description": "Crawl a website from a root URL and extract discovered pages.", "inputSchema": objectSchema(siteTraversalProperties(true), "url")},
-		{"name": "tavily_map", "description": "Discover a website's URL structure without extracting page content.", "inputSchema": objectSchema(siteTraversalProperties(false), "url")},
-		{"name": "tavily_research", "description": "Perform comprehensive multi-source research. Returns the completed cited report; TvLink streams progress when the client supports it.", "inputSchema": objectSchema(map[string]any{
-			"input":           stringSchema("A complete research question or task. This field is required; do not use query."),
-			"model":           enumSchema("Research breadth. mini suits narrow tasks; pro suits broad multi-angle tasks.", "auto", "mini", "pro", "auto"),
-			"output_length":   enumSchema("Target report size.", "standard", "short", "standard", "long"),
-			"citation_format": enumSchema("Citation style.", "numbered", "numbered", "mla", "apa", "chicago"),
-			"include_domains": stringArraySchema("Preferred source domains."), "exclude_domains": stringArraySchema("Blocked source domains."),
-			"output_schema": map[string]any{"type": "object", "description": "Optional JSON Schema for structured report content."},
-		}, "input")},
+	var document struct {
+		Result struct {
+			Tools []map[string]any `json:"tools"`
+		} `json:"result"`
 	}
-}
-
-func objectSchema(properties map[string]any, required ...string) map[string]any {
-	return map[string]any{"type": "object", "additionalProperties": false, "properties": properties, "required": required}
-}
-
-func stringSchema(description string) map[string]any {
-	return map[string]any{"type": "string", "description": description}
-}
-func boolSchema(description string, defaultValue bool) map[string]any {
-	return map[string]any{"type": "boolean", "description": description, "default": defaultValue}
-}
-func integerSchema(description string, defaultValue int) map[string]any {
-	return map[string]any{"type": "integer", "description": description, "default": defaultValue, "minimum": 1}
-}
-func stringArraySchema(description string) map[string]any {
-	return map[string]any{"type": "array", "description": description, "items": map[string]any{"type": "string"}, "default": []string{}}
-}
-func enumSchema(description, defaultValue string, values ...string) map[string]any {
-	return map[string]any{"type": "string", "description": description, "default": defaultValue, "enum": values}
-}
-
-func siteTraversalProperties(includeExtraction bool) map[string]any {
-	properties := map[string]any{
-		"url": stringSchema("The root URL."), "max_depth": integerSchema("Maximum link depth.", 1), "max_breadth": integerSchema("Maximum links followed per page.", 20),
-		"limit": integerSchema("Maximum URLs to process.", 50), "instructions": stringSchema("Optional natural-language page selection instructions."),
-		"select_paths": stringArraySchema("Regular expressions selecting URL paths."), "select_domains": stringArraySchema("Regular expressions selecting domains."),
-		"allow_external": boolSchema("Allow external links in results.", true),
+	if err := json.Unmarshal(officialToolsJSON, &document); err != nil {
+		panic("embedded Tavily tool schema is invalid: " + err.Error())
 	}
-	if includeExtraction {
-		properties["extract_depth"] = enumSchema("Extraction depth.", "basic", "basic", "advanced")
-		properties["format"] = enumSchema("Extracted content format.", "markdown", "markdown", "text")
-		properties["include_favicon"] = boolSchema("Include favicon URLs.", false)
-	}
-	return properties
+	return document.Result.Tools
 }

@@ -47,7 +47,7 @@ func TestToolsExposeRequiredResearchInputSchema(t *testing.T) {
 	if _, ok := properties["input"]; !ok {
 		t.Fatal("research input schema does not define input")
 	}
-	required, ok := schema["required"].([]string)
+	required, ok := schema["required"].([]any)
 	if !ok {
 		t.Fatal("research input schema does not define required")
 	}
