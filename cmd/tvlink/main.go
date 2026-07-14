@@ -52,9 +52,21 @@ func main() {
 			slog.Warn("initial usage refresh failed", "key", key.Name, "error", err)
 		}
 	}
+	if settings.GroupingEnabled() {
+		location, _ := time.LoadLocation(settings.GroupRotationTimezone)
+		if err := keyPool.ConfigureGroups(pool.GroupConfig{Size: settings.KeyGroupSize, UsageLimit: settings.GroupUsageLimit, Location: location}); err != nil {
+			slog.Error("configure key groups", "error", err)
+			os.Exit(1)
+		}
+		if err := keyPool.RebuildGroups(time.Now()); err != nil {
+			slog.Error("build key groups", "error", err)
+			os.Exit(1)
+		}
+	}
 	go refreshLoop(ctx, usageClient, keys, settings.UsageRefreshInterval)
 
-	rest := proxy.New(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, int64(settings.RequestBodyLimit), settings.ResearchMappingTTL)
+	selector := pool.NewCoordinator(keyPool, usageClient.RefreshAll)
+	rest := proxy.NewWithCoordinator(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, selector, int64(settings.RequestBodyLimit), settings.ResearchMappingTTL)
 	mux := http.NewServeMux()
 	mux.Handle("/", monitor.New(keyPool, settings.MonitorRefreshInterval))
 	mux.Handle("/mcp", mcp.New(settings.TvLinkAPIKey, version, rest))

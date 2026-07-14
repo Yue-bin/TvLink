@@ -52,6 +52,17 @@ type Client struct {
 	keys    map[string]pool.Key
 }
 
+// RefreshAll refreshes every configured key and reports any failed refresh.
+func (c *Client) RefreshAll(ctx context.Context) error {
+	var failures []error
+	for name := range c.keys {
+		if err := c.RefreshUsage(ctx, name); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
 // NewClient creates a Tavily usage client.
 func NewClient(baseURL string, httpClient *http.Client, keyPool *pool.Pool, keys []pool.Key) *Client {
 	configured := make(map[string]pool.Key, len(keys))

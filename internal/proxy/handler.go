@@ -21,6 +21,7 @@ type Handler struct {
 	baseURL     string
 	http        *http.Client
 	pool        *pool.Pool
+	selector    *pool.Coordinator
 	maxBody     int64
 	researchTTL time.Duration
 	researchMu  sync.Mutex
@@ -43,7 +44,7 @@ func (h *Handler) StreamResearch(ctx context.Context, body []byte) (*http.Respon
 	if err != nil {
 		return nil, fmt.Errorf("encode streaming research arguments: %w", err)
 	}
-	lease, err := h.pool.Select(time.Now(), estimate("/research", payload))
+	lease, err := h.selector.Select(ctx, time.Now(), estimate("/research", payload))
 	if err != nil {
 		return nil, err
 	}
@@ -69,11 +70,17 @@ func (h *Handler) StreamResearch(ctx context.Context, body []byte) (*http.Respon
 
 // New creates a proxy handler.
 func New(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, maxBody int64, researchTTL time.Duration) *Handler {
+	return NewWithCoordinator(clientKey, upstreamBaseURL, httpClient, keyPool, pool.NewCoordinator(keyPool, nil), maxBody, researchTTL)
+}
+
+// NewWithCoordinator creates a proxy handler with grouped request selection.
+func NewWithCoordinator(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, selector *pool.Coordinator, maxBody int64, researchTTL time.Duration) *Handler {
 	return &Handler{
 		clientKey:   clientKey,
 		baseURL:     strings.TrimRight(upstreamBaseURL, "/"),
 		http:        httpClient,
 		pool:        keyPool,
+		selector:    selector,
 		maxBody:     maxBody,
 		researchTTL: researchTTL,
 		research:    make(map[string]researchMapping),
@@ -105,7 +112,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		lease, err := h.pool.Select(time.Now(), estimate(r.URL.Path, body))
+		lease, err := h.selector.Select(r.Context(), time.Now(), estimate(r.URL.Path, body))
 		if err != nil {
 			http.Error(w, "no Tavily key is currently available", http.StatusServiceUnavailable)
 			return
