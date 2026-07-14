@@ -336,7 +336,7 @@ const pageHTML = `<!doctype html>
               <div class="progress-projected" style="{{.Metrics.ProjectedWidth}}"></div>
               <div class="progress-actual" style="{{.Metrics.ActualWidth}}"></div>
             </div>
-            <div class="group-meta"><span>{{.KeyCount}} Key{{if .Active}} · {{.AvailableKeys}} 可用{{end}}</span><span>轮次 {{.RoundUsage}}</span></div>
+            <div class="group-meta"><span>{{.KeyCount}} Key{{if .Active}} · {{.AvailableKeys}} 可用{{end}}</span><span>本轮次 {{.RoundUsage}}</span></div>
           </button>
           {{end}}
         </nav>
