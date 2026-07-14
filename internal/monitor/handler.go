@@ -26,7 +26,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	view := newPageView(h.pool.Snapshots(now), h.refreshInterval, now)
+	view := newPageView(h.pool.MonitorSnapshot(now), now)
+	view.RefreshSeconds = int64(h.refreshInterval.Seconds())
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.Execute(w, view); err != nil {

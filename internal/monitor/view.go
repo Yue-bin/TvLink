@@ -23,6 +23,8 @@ type progressView struct {
 
 type keyView struct {
 	Name       string
+	GroupID    string
+	GroupName  string
 	State      string
 	StateClass string
 	Metrics    progressView
@@ -33,49 +35,101 @@ type keyView struct {
 	ShowRetry  bool
 }
 
+type groupView struct {
+	ID            string
+	Name          string
+	State         string
+	StateClass    string
+	Active        bool
+	Metrics       progressView
+	KeyCount      int
+	AvailableKeys int
+	Remaining     string
+	RoundUsage    string
+}
+
 type pageView struct {
 	RefreshSeconds     int64
+	GeneratedAt        string
 	Total              progressView
 	ProjectedRemaining string
 	AvailableKeys      int
 	TotalKeys          int
 	Rows               []keyView
+	Groups             []groupView
+	GroupingEnabled    bool
+	ActiveGroupName    string
 	Empty              bool
 }
 
-func newPageView(snapshots []pool.Snapshot, refreshInterval time.Duration, _ time.Time) pageView {
+func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 	view := pageView{
-		RefreshSeconds: int64(refreshInterval.Seconds()),
-		TotalKeys:      len(snapshots),
-		Rows:           make([]keyView, 0, len(snapshots)),
-		Empty:          len(snapshots) == 0,
+		GeneratedAt:     formatTimestamp(now),
+		TotalKeys:       len(snapshot.Keys),
+		Rows:            make([]keyView, 0, len(snapshot.Keys)),
+		Groups:          make([]groupView, 0, len(snapshot.Groups)),
+		GroupingEnabled: snapshot.GroupingEnabled && len(snapshot.Groups) > 0,
+		ActiveGroupName: "--",
+		Empty:           len(snapshot.Keys) == 0,
 	}
 	var totalLimit, totalActual int64
 	var totalEstimated, totalRemaining float64
-	for _, snapshot := range snapshots {
-		totalLimit += snapshot.Limit
-		totalActual += snapshot.RealUsage
-		totalEstimated += snapshot.EstimatedUsage
-		totalRemaining += snapshot.Remaining
-		if snapshot.Weight > 0 {
+	for _, key := range snapshot.Keys {
+		totalLimit += key.Limit
+		totalActual += key.RealUsage
+		totalEstimated += key.EstimatedUsage
+		totalRemaining += key.Remaining
+		if key.Weight > 0 {
 			view.AvailableKeys++
 		}
-		metrics := newProgressView(snapshot.RealUsage, snapshot.EstimatedUsage, snapshot.Limit)
+		metrics := newProgressView(key.RealUsage, key.EstimatedUsage, key.Limit)
 		if metrics.Unavailable {
 			metrics.UsageText = "尚无用量数据"
 			metrics.AriaLabel = "用量数据尚不可用"
 		}
+		groupID, groupName := "", ""
+		if key.Group > 0 {
+			groupID = fmt.Sprintf("group-%d", key.Group)
+			groupName = fmt.Sprintf("Group %d", key.Group)
+		}
 		view.Rows = append(view.Rows, keyView{
-			Name:       snapshot.Name,
-			State:      string(snapshot.State),
-			StateClass: "state-" + string(snapshot.State),
+			Name:       key.Name,
+			GroupID:    groupID,
+			GroupName:  groupName,
+			State:      string(key.State),
+			StateClass: "state-" + string(key.State),
 			Metrics:    metrics,
-			UpdatedAt:  formatTimestamp(snapshot.RealUsageAt),
-			Remaining:  formatFloat(snapshot.Remaining),
-			Weight:     formatFloat(snapshot.Weight),
-			RetryAt:    formatTimestamp(snapshot.RetryAt),
-			ShowRetry:  snapshot.State == pool.StateCooling,
+			UpdatedAt:  formatTimestamp(key.RealUsageAt),
+			Remaining:  formatFloat(key.Remaining),
+			Weight:     formatFloat(key.Weight),
+			RetryAt:    formatTimestamp(key.RetryAt),
+			ShowRetry:  key.State == pool.StateCooling,
 		})
+	}
+	for _, group := range snapshot.Groups {
+		state, stateClass := "等待", "group-waiting"
+		if group.Spent {
+			state, stateClass = "本轮完成", "group-spent"
+		}
+		if group.Active {
+			state, stateClass = "当前活动", "group-active"
+		}
+		name := fmt.Sprintf("Group %d", group.Index)
+		view.Groups = append(view.Groups, groupView{
+			ID:            fmt.Sprintf("group-%d", group.Index),
+			Name:          name,
+			State:         state,
+			StateClass:    stateClass,
+			Active:        group.Active,
+			Metrics:       newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit),
+			KeyCount:      group.KeyCount,
+			AvailableKeys: group.AvailableKeys,
+			Remaining:     formatFloat(group.Remaining),
+			RoundUsage:    fmt.Sprintf("%s / %s", formatFloat(group.RoundUsage), formatFloat(group.RoundLimit)),
+		})
+		if group.Active {
+			view.ActiveGroupName = name
+		}
 	}
 	view.Total = newProgressView(totalActual, totalEstimated, totalLimit)
 	view.ProjectedRemaining = formatFloat(totalRemaining)

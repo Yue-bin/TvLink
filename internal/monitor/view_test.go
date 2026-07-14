@@ -15,7 +15,7 @@ func TestNewPageViewAggregatesUsageAndBuildsRows(t *testing.T) {
 		{Name: "backup-cn", Limit: 500, RealUsage: 200, EstimatedUsage: 0, Remaining: 300, Weight: 0, State: pool.StateCooling, RealUsageAt: now.Add(-23 * time.Second), RetryAt: now.Add(42 * time.Second)},
 	}
 
-	view := newPageView(snapshots, 5*time.Second, now)
+	view := newPageView(pool.MonitorSnapshot{Keys: snapshots}, now)
 
 	if view.Total.UsageText != "740 (+55) / 1,500" {
 		t.Errorf("total usage = %q", view.Total.UsageText)
@@ -39,10 +39,10 @@ func TestNewPageViewAggregatesUsageAndBuildsRows(t *testing.T) {
 
 func TestNewPageViewHandlesUnavailableAndClampedUsage(t *testing.T) {
 	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.Local)
-	view := newPageView([]pool.Snapshot{
+	view := newPageView(pool.MonitorSnapshot{Keys: []pool.Snapshot{
 		{Name: "over", Limit: 10, RealUsage: 12, EstimatedUsage: 0.25, Remaining: 0, State: pool.StateExhausted},
 		{Name: "pending", Limit: 0, State: pool.StatePending},
-	}, 5*time.Second, now)
+	}}, now)
 
 	if view.Total.UsageText != "12 (+0.25) / 10" {
 		t.Errorf("total usage = %q", view.Total.UsageText)
@@ -62,8 +62,44 @@ func TestNewPageViewHandlesUnavailableAndClampedUsage(t *testing.T) {
 }
 
 func TestNewPageViewRendersEmptyState(t *testing.T) {
-	view := newPageView(nil, 5*time.Second, time.Now())
-	if !view.Empty || view.Total.UsageText != "0 (+0) / 0" || view.RefreshSeconds != 5 {
+	view := newPageView(pool.MonitorSnapshot{}, time.Now())
+	if !view.Empty || view.Total.UsageText != "0 (+0) / 0" {
 		t.Errorf("empty view = %+v", view)
+	}
+}
+
+func TestNewPageViewBuildsGroupFilters(t *testing.T) {
+	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.Local)
+	snapshot := pool.MonitorSnapshot{
+		GroupingEnabled: true,
+		ActiveGroup:     2,
+		Keys: []pool.Snapshot{
+			{Name: "one", Group: 1, Limit: 100, RealUsage: 20, EstimatedUsage: 3, Remaining: 77, State: pool.StateReady},
+			{Name: "two", Group: 2, Limit: 200, RealUsage: 80, EstimatedUsage: 5, Remaining: 115, Weight: 100, State: pool.StateReady},
+		},
+		Groups: []pool.GroupSnapshot{
+			{Index: 1, Spent: true, KeyCount: 1, Limit: 100, RealUsage: 20, EstimatedUsage: 3, Remaining: 77, RoundUsage: 600, RoundLimit: 600},
+			{Index: 2, Active: true, KeyCount: 1, AvailableKeys: 1, Limit: 200, RealUsage: 80, EstimatedUsage: 5, Remaining: 115, RoundUsage: 384, RoundLimit: 600},
+		},
+	}
+
+	view := newPageView(snapshot, now)
+	if !view.GroupingEnabled || view.ActiveGroupName != "Group 2" || len(view.Groups) != 2 {
+		t.Fatalf("group view = %+v", view)
+	}
+	if view.Groups[0].ID != "group-1" || view.Groups[0].State != "本轮完成" {
+		t.Errorf("first group = %+v", view.Groups[0])
+	}
+	if view.Groups[0].Metrics.UsageText != "20 (+3) / 100" || view.Groups[0].Metrics.ProjectedWidth != "width:23.00%" {
+		t.Errorf("first group progress = %+v", view.Groups[0].Metrics)
+	}
+	if view.Groups[1].RoundUsage != "384 / 600" || view.Groups[1].AvailableKeys != 1 {
+		t.Errorf("active group = %+v", view.Groups[1])
+	}
+	if view.Rows[0].GroupID != "group-1" || view.Rows[1].GroupName != "Group 2" {
+		t.Errorf("key groups = %+v", view.Rows)
+	}
+	if view.GeneratedAt != "07-15 12:00:00" {
+		t.Errorf("GeneratedAt = %q", view.GeneratedAt)
 	}
 }
