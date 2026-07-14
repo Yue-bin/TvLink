@@ -19,9 +19,11 @@ TvLink 是一个 Tavily API Key 池服务，向客户端提供统一的 REST 与
 
 ### Key 分组轮换
 
-可选地配置 `key_group_size`、`group_usage_limit` 和 `group_rotation_timezone`，让 TvLink 将可用 Key 按剩余额度均衡分组，并在当前组累计消耗固定的预估 Tavily credits 后轮换下一组。时区使用 IANA 名称，例如 `Asia/Shanghai`；月度边界和所有组完成一轮后会刷新用量并重新均衡分组。单把 Key 耗尽不会立刻重分组。
+可选地配置 `key_group_size`、`group_usage_limit` 和 `group_rotation_timezone`，让一批 Key 形成较长且稳定的使用窗口。它适合在固定出站 IP 下控制 Key 的使用节奏，避免全池 Key 在短时间内同时参与分配；分组不会改变服务的出站 IP。
 
-分组只控制同一出站 IP 下的 Key 使用节奏，不会改变服务的出站 IP。
+启动、跨月或一轮全部组完成时，TvLink 会先刷新权威用量，再把有剩余额度的 Key 分配到大小尽量均匀的组中。分配会在满足组大小约束的所有组合里，优先最小化各组剩余额度的最大差值，再最小化方差；因此不同套餐或已有不同用量的 Key 也会得到尽可能均衡的组承载力。
+
+请求只会在当前活动组内按剩余额度加权选择 Key。本组累计的预估 Tavily credits 到达 `group_usage_limit` 后，下一次请求切到后续组；429 和确定性不计费的 4xx 会回滚对应的组用量。单把 Key 耗尽不会立即打散分组，只有整个重建时机到来才重新计算成员归属。时区使用 IANA 名称，例如 `Asia/Shanghai`。
 
 启用分组后，监控页左侧以竖排列表显示各组汇总用量，并保留真实/预估双层进度条；右侧可在全部 Key 和单个组之间切换。移动端使用下拉选择，页面筛选完全在已渲染的静态 HTML 内完成。
 
