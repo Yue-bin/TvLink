@@ -175,3 +175,63 @@ func TestSelectRotatesBeforeCrossingGroupLimit(t *testing.T) {
 		t.Errorf("second selection reused spent group key %q", second.Key.Name)
 	}
 }
+
+func TestMonitorSnapshotAggregatesGroupsAndSelectionWeights(t *testing.T) {
+	now := time.Now()
+	keys := []Key{
+		{Name: "one", APIKey: "tvly-one"},
+		{Name: "two", APIKey: "tvly-two"},
+		{Name: "three", APIKey: "tvly-three"},
+		{Name: "four", APIKey: "tvly-four"},
+	}
+	p := New(keys, 1)
+	for index, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 100, Used: int64(10 * (index + 1))}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 2, UsageLimit: 10, Location: time.UTC}); err != nil {
+		t.Fatalf("ConfigureGroups() error = %v", err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatalf("RebuildGroups() error = %v", err)
+	}
+	if _, err := p.Select(now, 3); err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+
+	snapshot := p.MonitorSnapshot(now)
+	if !snapshot.GroupingEnabled || snapshot.ActiveGroup != 1 {
+		t.Fatalf("grouping = %v, active group = %d", snapshot.GroupingEnabled, snapshot.ActiveGroup)
+	}
+	if len(snapshot.Groups) != 2 || len(snapshot.Keys) != 4 {
+		t.Fatalf("groups = %d, keys = %d", len(snapshot.Groups), len(snapshot.Keys))
+	}
+
+	var totalLimit, totalUsage int64
+	var totalEstimated, totalRemaining float64
+	for _, group := range snapshot.Groups {
+		if group.KeyCount != 2 || group.RoundLimit != 10 {
+			t.Errorf("group %d = %+v", group.Index, group)
+		}
+		totalLimit += group.Limit
+		totalUsage += group.RealUsage
+		totalEstimated += group.EstimatedUsage
+		totalRemaining += group.Remaining
+		if group.Active && group.RoundUsage != 3 {
+			t.Errorf("active group round usage = %v, want 3", group.RoundUsage)
+		}
+	}
+	if totalLimit != 400 || totalUsage != 100 || totalEstimated != 3 || totalRemaining != 297 {
+		t.Errorf("group totals = limit %d, usage %d, estimated %v, remaining %v", totalLimit, totalUsage, totalEstimated, totalRemaining)
+	}
+	for _, key := range snapshot.Keys {
+		if key.Group == 0 {
+			t.Errorf("key %q has no group", key.Name)
+		}
+		if key.Group == snapshot.ActiveGroup && key.Weight <= 0 {
+			t.Errorf("active key %q weight = %v", key.Name, key.Weight)
+		}
+		if key.Group != snapshot.ActiveGroup && key.Weight != 0 {
+			t.Errorf("inactive key %q weight = %v", key.Name, key.Weight)
+		}
+	}
+}

@@ -54,6 +54,7 @@ type Lease struct {
 // Snapshot is the redacted state exposed to the monitor.
 type Snapshot struct {
 	Name           string
+	Group          int
 	Limit          int64
 	RealUsage      int64
 	RealUsageAt    time.Time
@@ -62,6 +63,29 @@ type Snapshot struct {
 	Weight         float64
 	State          State
 	RetryAt        time.Time
+}
+
+// GroupSnapshot is the redacted aggregate state of one configured key group.
+type GroupSnapshot struct {
+	Index          int
+	Active         bool
+	Spent          bool
+	KeyCount       int
+	AvailableKeys  int
+	Limit          int64
+	RealUsage      int64
+	EstimatedUsage float64
+	Remaining      float64
+	RoundUsage     float64
+	RoundLimit     float64
+}
+
+// MonitorSnapshot is an atomic copy of key and group allocation state.
+type MonitorSnapshot struct {
+	Keys            []Snapshot
+	Groups          []GroupSnapshot
+	GroupingEnabled bool
+	ActiveGroup     int
 }
 
 // GroupConfig enables optional key-group rotation.
@@ -340,6 +364,74 @@ func (p *Pool) Snapshots(now time.Time) []Snapshot {
 		return snapshots[i].Name < snapshots[j].Name
 	})
 	return snapshots
+}
+
+// MonitorSnapshot returns one consistent view of key and group monitor state.
+func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	groupingEnabled := p.groupConfig != (GroupConfig{})
+	membership := make(map[string]int, len(p.keys))
+	weights := make(map[string]float64, len(p.keys))
+	candidates := p.candidates(now)
+	if groupingEnabled && p.activeGroup >= 0 && p.activeGroup < len(p.groups) {
+		candidates = p.candidatesFor(now, p.groups[p.activeGroup].keys)
+	}
+	for _, candidate := range candidates {
+		weights[candidate.state.key.Name] = candidate.weight
+	}
+
+	groups := make([]GroupSnapshot, 0, len(p.groups))
+	for index, group := range p.groups {
+		snapshot := GroupSnapshot{
+			Index:      index + 1,
+			Active:     index == p.activeGroup,
+			Spent:      group.reserved >= p.groupConfig.UsageLimit,
+			KeyCount:   len(group.keys),
+			RoundUsage: group.reserved,
+			RoundLimit: p.groupConfig.UsageLimit,
+		}
+		for name := range group.keys {
+			membership[name] = index + 1
+			state := p.keys[name]
+			snapshot.Limit += state.limit
+			snapshot.RealUsage += state.realUsage
+			snapshot.EstimatedUsage += state.estimated
+			snapshot.Remaining += state.remaining()
+			if weights[name] > 0 {
+				snapshot.AvailableKeys++
+			}
+		}
+		groups = append(groups, snapshot)
+	}
+
+	keys := make([]Snapshot, 0, len(p.keys))
+	for name, state := range p.keys {
+		keys = append(keys, Snapshot{
+			Name:           state.key.Name,
+			Group:          membership[name],
+			Limit:          state.limit,
+			RealUsage:      state.realUsage,
+			RealUsageAt:    state.realAt,
+			EstimatedUsage: state.estimated,
+			Remaining:      state.remaining(),
+			Weight:         weights[name],
+			State:          state.state,
+			RetryAt:        state.retryAt,
+		})
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Name < keys[j].Name })
+	activeGroup := 0
+	if p.activeGroup >= 0 && p.activeGroup < len(p.groups) {
+		activeGroup = p.activeGroup + 1
+	}
+	return MonitorSnapshot{
+		Keys:            keys,
+		Groups:          groups,
+		GroupingEnabled: groupingEnabled,
+		ActiveGroup:     activeGroup,
+	}
 }
 
 type candidate struct {
