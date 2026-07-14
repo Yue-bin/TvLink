@@ -13,6 +13,9 @@ import (
 // ErrNoEligibleKey indicates that every configured key is unavailable.
 var ErrNoEligibleKey = errors.New("no eligible tavily key")
 
+// ErrGroupRebuildRequired indicates that grouped allocation needs refreshed usage.
+var ErrGroupRebuildRequired = errors.New("key groups require rebuild")
+
 // State describes a key's current allocation state.
 type State string
 
@@ -87,12 +90,18 @@ type groupState struct {
 
 // Pool synchronizes key allocation, reservations, and circuit state.
 type Pool struct {
-	mu          sync.Mutex
-	keys        map[string]*keyState
-	random      *rand.Rand
-	groupConfig GroupConfig
-	groups      []groupState
-	activeGroup int
+	mu            sync.Mutex
+	keys          map[string]*keyState
+	random        *rand.Rand
+	groupConfig   GroupConfig
+	groups        []groupState
+	activeGroup   int
+	rotationMonth month
+}
+
+type month struct {
+	year  int
+	month time.Month
 }
 
 // New creates a pool with the provided Tavily credentials.
@@ -155,6 +164,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	if len(keys) == 0 {
 		p.groups = nil
 		p.activeGroup = -1
+		p.rotationMonth = monthOf(now, p.groupConfig.Location)
 		return nil
 	}
 
@@ -190,7 +200,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	} else {
 		p.activeGroup = (p.activeGroup + 1) % len(p.groups)
 	}
-	_ = now
+	p.rotationMonth = monthOf(now, p.groupConfig.Location)
 	return nil
 }
 
@@ -233,11 +243,17 @@ func (p *Pool) Key(name string) (Key, bool) {
 func (p *Pool) Select(now time.Time, estimate float64) (Lease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.groupConfig != (GroupConfig{}) && len(p.groups) > 0 && monthOf(now, p.groupConfig.Location) != p.rotationMonth {
+		return Lease{}, ErrGroupRebuildRequired
+	}
 
 	groupIndex := -1
 	candidates := p.candidates(now)
 	if p.groupConfig != (GroupConfig{}) && len(p.groups) > 0 {
 		groupIndex, candidates = p.groupCandidates(now, estimate)
+		if len(candidates) == 0 && p.allGroupsSpent() {
+			return Lease{}, ErrGroupRebuildRequired
+		}
 	}
 	if len(candidates) == 0 {
 		return Lease{}, ErrNoEligibleKey
@@ -379,6 +395,23 @@ func (p *Pool) groupCandidates(now time.Time, estimate float64) (int, []candidat
 		return index, candidates
 	}
 	return -1, nil
+}
+
+func (p *Pool) allGroupsSpent() bool {
+	if len(p.groups) == 0 {
+		return false
+	}
+	for _, group := range p.groups {
+		if group.reserved < p.groupConfig.UsageLimit {
+			return false
+		}
+	}
+	return true
+}
+
+func monthOf(now time.Time, location *time.Location) month {
+	local := now.In(location)
+	return month{year: local.Year(), month: local.Month()}
 }
 
 func (p *Pool) rollbackEstimate(state *keyState, lease Lease) {
