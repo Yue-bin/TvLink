@@ -81,3 +81,41 @@ func TestRateLimitAllowsOneProbeAfterRetryAfter(t *testing.T) {
 		t.Fatalf("Select() after successful probe error = %v", err)
 	}
 }
+
+func TestRebuildGroupsBalancesRemainingCapacity(t *testing.T) {
+	now := time.Now()
+	keys := make([]Key, 0, 10)
+	for index := 0; index < 10; index++ {
+		keys = append(keys, Key{Name: string(rune('a' + index)), APIKey: "tvly-key"})
+	}
+	p := New(keys, 1)
+	for index, remaining := range []int64{100, 90, 80, 70, 60, 50, 40, 30, 20, 10} {
+		p.UpdateUsage(keys[index].Name, Usage{Limit: 100, Used: 100 - remaining}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 3, UsageLimit: 600, Location: time.UTC}); err != nil {
+		t.Fatalf("ConfigureGroups() error = %v", err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatalf("RebuildGroups() error = %v", err)
+	}
+
+	if len(p.groups) != 4 {
+		t.Fatalf("len(groups) = %d, want 4", len(p.groups))
+	}
+	wantCounts := []int{3, 3, 2, 2}
+	seen := make(map[string]bool)
+	for index, group := range p.groups {
+		if len(group.keys) != wantCounts[index] {
+			t.Errorf("group %d size = %d, want %d", index, len(group.keys), wantCounts[index])
+		}
+		for name := range group.keys {
+			if seen[name] {
+				t.Errorf("key %q belongs to more than one group", name)
+			}
+			seen[name] = true
+		}
+	}
+	if len(seen) != len(keys) {
+		t.Errorf("assigned keys = %d, want %d", len(seen), len(keys))
+	}
+}

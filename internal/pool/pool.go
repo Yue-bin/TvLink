@@ -3,6 +3,7 @@ package pool
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -59,6 +60,13 @@ type Snapshot struct {
 	RetryAt        time.Time
 }
 
+// GroupConfig enables optional key-group rotation.
+type GroupConfig struct {
+	Size       int
+	UsageLimit float64
+	Location   *time.Location
+}
+
 type keyState struct {
 	key       Key
 	limit     int64
@@ -70,11 +78,20 @@ type keyState struct {
 	retryAt   time.Time
 }
 
+type groupState struct {
+	keys      map[string]struct{}
+	remaining float64
+	reserved  float64
+}
+
 // Pool synchronizes key allocation, reservations, and circuit state.
 type Pool struct {
-	mu     sync.Mutex
-	keys   map[string]*keyState
-	random *rand.Rand
+	mu          sync.Mutex
+	keys        map[string]*keyState
+	random      *rand.Rand
+	groupConfig GroupConfig
+	groups      []groupState
+	activeGroup int
 }
 
 // New creates a pool with the provided Tavily credentials.
@@ -84,9 +101,96 @@ func New(keys []Key, seed int64) *Pool {
 		states[key.Name] = &keyState{key: key, state: StatePending}
 	}
 	return &Pool{
-		keys:   states,
-		random: rand.New(rand.NewSource(seed)),
+		keys:        states,
+		random:      rand.New(rand.NewSource(seed)),
+		activeGroup: -1,
 	}
+}
+
+// ConfigureGroups configures optional key-group rotation.
+func (p *Pool) ConfigureGroups(config GroupConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if config == (GroupConfig{}) {
+		p.groupConfig = GroupConfig{}
+		p.groups = nil
+		p.activeGroup = -1
+		return nil
+	}
+	if config.Size <= 0 {
+		return fmt.Errorf("group size must be positive")
+	}
+	if config.UsageLimit <= 0 {
+		return fmt.Errorf("group usage limit must be positive")
+	}
+	if config.Location == nil {
+		return fmt.Errorf("group location is required")
+	}
+	p.groupConfig = config
+	p.groups = nil
+	p.activeGroup = -1
+	return nil
+}
+
+// RebuildGroups redistributes known, non-exhausted keys by remaining capacity.
+func (p *Pool) RebuildGroups(now time.Time) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.groupConfig == (GroupConfig{}) {
+		return nil
+	}
+	keys := make([]*keyState, 0, len(p.keys))
+	for _, state := range p.keys {
+		if !state.ready || state.state == StateExhausted || state.remaining() <= 0 {
+			continue
+		}
+		keys = append(keys, state)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i].remaining() > keys[j].remaining()
+	})
+	if len(keys) == 0 {
+		p.groups = nil
+		p.activeGroup = -1
+		return nil
+	}
+
+	groupCount := (len(keys) + p.groupConfig.Size - 1) / p.groupConfig.Size
+	baseSize := len(keys) / groupCount
+	extra := len(keys) % groupCount
+	p.groups = make([]groupState, groupCount)
+	capacities := make([]int, groupCount)
+	for index := range p.groups {
+		capacities[index] = baseSize
+		if index < extra {
+			capacities[index]++
+		}
+		p.groups[index].keys = make(map[string]struct{}, capacities[index])
+	}
+	for _, state := range keys {
+		chosen := -1
+		for index := range p.groups {
+			group := &p.groups[index]
+			if len(group.keys) >= capacities[index] {
+				continue
+			}
+			if chosen < 0 || group.remaining < p.groups[chosen].remaining {
+				chosen = index
+			}
+		}
+		group := &p.groups[chosen]
+		group.keys[state.key.Name] = struct{}{}
+		group.remaining += state.remaining()
+	}
+	if p.activeGroup < 0 {
+		p.activeGroup = 0
+	} else {
+		p.activeGroup = (p.activeGroup + 1) % len(p.groups)
+	}
+	_ = now
+	return nil
 }
 
 // UpdateUsage replaces a key's authoritative Tavily usage snapshot.
