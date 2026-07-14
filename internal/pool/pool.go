@@ -183,6 +183,9 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 		keys = append(keys, state)
 	}
 	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].remaining() == keys[j].remaining() {
+			return keys[i].key.Name < keys[j].key.Name
+		}
 		return keys[i].remaining() > keys[j].remaining()
 	})
 	if len(keys) == 0 {
@@ -195,30 +198,14 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	groupCount := (len(keys) + p.groupConfig.Size - 1) / p.groupConfig.Size
 	baseSize := len(keys) / groupCount
 	extra := len(keys) % groupCount
-	p.groups = make([]groupState, groupCount)
 	capacities := make([]int, groupCount)
-	for index := range p.groups {
+	for index := range capacities {
 		capacities[index] = baseSize
 		if index < extra {
 			capacities[index]++
 		}
-		p.groups[index].keys = make(map[string]struct{}, capacities[index])
 	}
-	for _, state := range keys {
-		chosen := -1
-		for index := range p.groups {
-			group := &p.groups[index]
-			if len(group.keys) >= capacities[index] {
-				continue
-			}
-			if chosen < 0 || group.remaining < p.groups[chosen].remaining {
-				chosen = index
-			}
-		}
-		group := &p.groups[chosen]
-		group.keys[state.key.Name] = struct{}{}
-		group.remaining += state.remaining()
-	}
+	p.groups = optimalGroups(keys, capacities)
 	if p.activeGroup < 0 {
 		p.activeGroup = 0
 	} else {
@@ -226,6 +213,100 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	}
 	p.rotationMonth = monthOf(now, p.groupConfig.Location)
 	return nil
+}
+
+type partitionBucket struct {
+	keys  []*keyState
+	total float64
+}
+
+type partitionScore struct {
+	spread   float64
+	variance float64
+}
+
+// optimalGroups finds the minimum-spread partition while preserving group sizes.
+func optimalGroups(keys []*keyState, capacities []int) []groupState {
+	buckets := make([]partitionBucket, len(capacities))
+	var best []partitionBucket
+	var bestScore partitionScore
+	searchPartition(keys, capacities, buckets, 0, &best, &bestScore)
+
+	groups := make([]groupState, len(capacities))
+	for index, bucket := range best {
+		groups[index].keys = make(map[string]struct{}, len(bucket.keys))
+		groups[index].remaining = bucket.total
+		for _, state := range bucket.keys {
+			groups[index].keys[state.key.Name] = struct{}{}
+		}
+	}
+	return groups
+}
+
+func searchPartition(keys []*keyState, capacities []int, buckets []partitionBucket, keyIndex int, best *[]partitionBucket, bestScore *partitionScore) {
+	if keyIndex == len(keys) {
+		score := scorePartition(buckets)
+		if len(*best) == 0 || betterPartition(score, *bestScore) {
+			*best = cloneBuckets(buckets)
+			*bestScore = score
+		}
+		return
+	}
+
+	state := keys[keyIndex]
+	for groupIndex := range buckets {
+		if len(buckets[groupIndex].keys) >= capacities[groupIndex] || equivalentBucket(buckets, capacities, groupIndex) {
+			continue
+		}
+		buckets[groupIndex].keys = append(buckets[groupIndex].keys, state)
+		buckets[groupIndex].total += state.remaining()
+		searchPartition(keys, capacities, buckets, keyIndex+1, best, bestScore)
+		buckets[groupIndex].total -= state.remaining()
+		buckets[groupIndex].keys = buckets[groupIndex].keys[:len(buckets[groupIndex].keys)-1]
+	}
+}
+
+func equivalentBucket(buckets []partitionBucket, capacities []int, index int) bool {
+	for previous := 0; previous < index; previous++ {
+		if capacities[previous] == capacities[index] && len(buckets[previous].keys) == len(buckets[index].keys) && buckets[previous].total == buckets[index].total {
+			return true
+		}
+	}
+	return false
+}
+
+func scorePartition(buckets []partitionBucket) partitionScore {
+	minimum, maximum := buckets[0].total, buckets[0].total
+	total := 0.0
+	for _, bucket := range buckets {
+		minimum = min(minimum, bucket.total)
+		maximum = max(maximum, bucket.total)
+		total += bucket.total
+	}
+	mean := total / float64(len(buckets))
+	variance := 0.0
+	for _, bucket := range buckets {
+		difference := bucket.total - mean
+		variance += difference * difference
+	}
+	return partitionScore{spread: maximum - minimum, variance: variance / float64(len(buckets))}
+}
+
+func betterPartition(candidate, current partitionScore) bool {
+	const epsilon = 1e-9
+	if candidate.spread < current.spread-epsilon {
+		return true
+	}
+	return candidate.spread <= current.spread+epsilon && candidate.variance < current.variance-epsilon
+}
+
+func cloneBuckets(buckets []partitionBucket) []partitionBucket {
+	clone := make([]partitionBucket, len(buckets))
+	for index, bucket := range buckets {
+		clone[index].keys = append([]*keyState(nil), bucket.keys...)
+		clone[index].total = bucket.total
+	}
+	return clone
 }
 
 // UpdateUsage replaces a key's authoritative Tavily usage snapshot.

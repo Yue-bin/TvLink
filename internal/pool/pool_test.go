@@ -2,6 +2,8 @@ package pool
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -233,5 +235,39 @@ func TestMonitorSnapshotAggregatesGroupsAndSelectionWeights(t *testing.T) {
 		if key.Group != snapshot.ActiveGroup && key.Weight != 0 {
 			t.Errorf("inactive key %q weight = %v", key.Name, key.Weight)
 		}
+	}
+}
+
+func TestRebuildGroupsMinimizesCapacitySpread(t *testing.T) {
+	now := time.Now()
+	keys := []Key{
+		{Name: "lemon-01"}, {Name: "lemon-02"}, {Name: "lemon-03"}, {Name: "lemon-04"},
+		{Name: "moncak-01"}, {Name: "moncak-02"}, {Name: "moncak-03"}, {Name: "moncak-04"},
+		{Name: "moncak-05"}, {Name: "moncak-06"},
+	}
+	remaining := []int64{99, 960, 992, 1000, 473, 442, 543, 994, 994, 994}
+	p := New(keys, 1)
+	for index, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 1000, Used: 1000 - remaining[index]}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 3, UsageLimit: 600, Location: time.UTC}); err != nil {
+		t.Fatalf("ConfigureGroups() error = %v", err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatalf("RebuildGroups() error = %v", err)
+	}
+
+	if got := []int{len(p.groups[0].keys), len(p.groups[1].keys), len(p.groups[2].keys), len(p.groups[3].keys)}; !reflect.DeepEqual(got, []int{3, 3, 2, 2}) {
+		t.Fatalf("group sizes = %v, want [3 3 2 2]", got)
+	}
+	totals := make([]float64, len(p.groups))
+	for index, group := range p.groups {
+		for name := range group.keys {
+			totals[index] += p.keys[name].remaining()
+		}
+	}
+	spread := slices.Max(totals) - slices.Min(totals)
+	if spread != 344 {
+		t.Errorf("group totals = %v, spread = %v, want 344", totals, spread)
 	}
 }
