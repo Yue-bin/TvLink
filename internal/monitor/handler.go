@@ -10,13 +10,12 @@ import (
 
 // Handler renders public pool snapshots.
 type Handler struct {
-	pool            *pool.Pool
-	refreshInterval time.Duration
+	pool *pool.Pool
 }
 
 // New creates a public monitor handler.
-func New(keyPool *pool.Pool, refreshInterval time.Duration) *Handler {
-	return &Handler{pool: keyPool, refreshInterval: refreshInterval}
+func New(keyPool *pool.Pool) *Handler {
+	return &Handler{pool: keyPool}
 }
 
 // ServeHTTP renders a non-cacheable status page.
@@ -27,7 +26,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	view := newPageView(h.pool.MonitorSnapshot(now), now)
-	view.RefreshSeconds = int64(h.refreshInterval.Seconds())
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.Execute(w, view); err != nil {

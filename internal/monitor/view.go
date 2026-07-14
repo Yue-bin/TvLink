@@ -49,7 +49,6 @@ type groupView struct {
 }
 
 type pageView struct {
-	RefreshSeconds     int64
 	GeneratedAt        string
 	Total              progressView
 	ProjectedRemaining string
