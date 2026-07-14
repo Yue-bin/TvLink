@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TvLink 分组监控预览</title>
+<style>
+:root{color-scheme:dark;--page:#090e12;--panel:#111920;--panel-2:#0d1318;--edge:#283946;--edge-strong:#385062;--text:#eef5f8;--muted:#8598a4;--accent:#70c9f3;--actual:#203b4b;--actual-edge:#4e7890;--estimate:#b6d9e9;--track:#060a0d;--ready:#77d2ad;--warning:#ffb55f;--danger:#ff9080}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:0}.shell{width:min(980px,calc(100% - 36px));margin:0 auto;padding:32px 0 48px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.identity h1{margin:0;font-size:21px;font-weight:740}.live{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px;text-transform:uppercase}.live-dot{width:7px;height:7px;border-radius:50%;background:var(--ready);box-shadow:0 0 0 3px rgba(119,210,173,.09)}
+.summary{padding:18px;background:var(--panel);border:1px solid var(--edge);border-radius:7px}.summary-top,.row-top{display:flex;align-items:end;justify-content:space-between;gap:14px}.eyebrow{color:var(--muted);font-size:10px;font-weight:700;text-transform:uppercase}.usage-number{margin-top:6px;font-size:28px;line-height:1;font-weight:760;font-variant-numeric:tabular-nums}.projected-percent{color:var(--accent);font-size:14px;font-weight:700;white-space:nowrap}
+.usage-progress{position:relative;height:14px;margin-top:16px;overflow:hidden;background:var(--track);border:1px solid #17232b;border-radius:3px}.progress-projected{position:absolute;z-index:1;inset:-1px auto -1px -1px;border:1px dashed var(--estimate);border-radius:3px;background:rgba(182,217,233,.035)}.progress-actual{position:absolute;z-index:2;top:3px;bottom:3px;left:0;background:var(--actual);border:1px solid var(--actual-edge);border-radius:2px}
+.summary-meta,.row-meta,.group-meta{display:flex;flex-wrap:wrap;gap:7px 16px;margin-top:12px;color:var(--muted);font-size:10px}.summary-meta strong,.row-meta strong,.group-meta strong{color:var(--text);font-weight:650}.legend-mark{display:inline-block;width:13px;height:7px;margin-right:5px;vertical-align:-1px;border-radius:1px}.legend-actual{background:var(--actual);border:1px solid var(--actual-edge)}.legend-projected{border:1px dashed var(--estimate)}
+.group-list{margin-top:17px;border-top:1px solid var(--edge)}.group-section{border-bottom:1px solid var(--edge)}.group-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 2px 11px;background:transparent}.group-section.active .group-header{margin:0 -10px;padding-left:10px;padding-right:10px;border-left:2px solid var(--accent);background:rgba(112,201,243,.035)}.group-title{display:flex;align-items:center;gap:9px;min-width:0}.group-name{font-size:12px;font-weight:760}.group-state{padding:3px 6px;border-radius:4px;font-size:9px;font-weight:760;text-transform:uppercase;white-space:nowrap;color:var(--muted);border:1px solid var(--edge-strong);background:var(--panel-2)}.group-section.active .group-state{color:var(--accent);border-color:rgba(112,201,243,.3);background:rgba(112,201,243,.07)}.group-section.done .group-state{color:var(--ready);border-color:rgba(119,210,173,.24);background:rgba(119,210,173,.07)}.group-budget{color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}.group-budget strong{color:var(--text);font-size:12px}.group-meta{margin:6px 0 0}
+.key-row{padding:14px 2px 14px 20px;border-top:1px solid rgba(40,57,70,.62)}.key-line{display:flex;align-items:center;gap:9px;min-width:0}.key-name{overflow:hidden;font-size:13px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.status{padding:3px 6px;border-radius:4px;font-size:9px;font-weight:760;text-transform:uppercase;white-space:nowrap}.state-ready{color:var(--ready);border:1px solid rgba(119,210,173,.24);background:rgba(119,210,173,.09)}.state-cooling{color:var(--warning);border:1px solid rgba(255,181,95,.24);background:rgba(255,181,95,.08)}.state-exhausted{color:var(--danger);border:1px solid rgba(255,144,128,.24);background:rgba(255,144,128,.08)}.state-pending{color:var(--muted);border:1px solid var(--edge-strong);background:var(--panel-2)}.row-usage{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{margin-top:20px;padding:11px 12px;border-left:2px solid var(--edge-strong);color:var(--muted);font-size:11px;background:var(--panel-2)}
+@media(max-width:620px){.shell{width:min(calc(100% - 20px),980px);padding-top:22px}.topbar,.summary-top,.row-top,.group-header{align-items:flex-start;flex-direction:column}.usage-number{font-size:23px}.row-usage{white-space:normal}.summary-meta,.row-meta,.group-meta{column-gap:12px}.key-row{padding-left:10px}.group-budget{text-align:left}}
+</style>
+</head>
+<body>
+<main class="shell">
+<header class="topbar"><div class="identity"><h1>TvLink 用量监控</h1></div><div class="live"><i class="live-dot"></i>自动刷新 5 秒</div></header>
+<section class="summary">
+<div class="summary-top"><div><div class="eyebrow">总用量</div><div class="usage-number">4,860 (+42) / 10,000</div></div><div class="projected-percent">预计 49.02%</div></div>
+<div class="usage-progress" role="img" aria-label="实际用量 4,860，预计总用量 4,902，额度 10,000"><div class="progress-projected" style="width:49.02%"></div><div class="progress-actual" style="width:48.60%"></div></div>
+<div class="summary-meta">
+<span><i class="legend-mark legend-actual"></i>实际 <strong>48.6%</strong></span><span><i class="legend-mark legend-projected"></i>预计 <strong>49.02%</strong></span><span>预计剩余 <strong>5,098</strong></span><span>可用 Key <strong>3 / 10</strong></span><span>当前组 <strong>2 / 4</strong></span><span>本轮组用量 <strong>384 / 600</strong></span>
+</div>
+</section>
+
+<section class="group-list">
+<section class="group-section done">
+<header class="group-header">
+<div><div class="group-title"><span class="group-name">Group 1</span><span class="group-state">本轮完成</span></div><div class="group-meta"><span>3 Key</span><span>预计剩余 <strong>1,120</strong></span></div></div>
+<div class="group-budget">本轮组用量 <strong>600 / 600</strong></div>
+</header>
+<article class="key-row">
+<div class="row-top"><div class="key-line"><span class="key-name">primary-01</span><span class="status state-ready">ready</span></div><span class="row-usage">510 (+0) / 1,000</span></div>
+<div class="usage-progress" role="img" aria-label="实际用量 510，预计总用量 510，额度 1,000"><div class="progress-projected" style="width:51%"></div><div class="progress-actual" style="width:51%"></div></div>
+<div class="row-meta"><span>实际更新 <strong>07-15 10:20:18</strong></span><span>预计剩余 <strong>490</strong></span><span>权重 <strong>0</strong></span></div>
+</article>
+</section>
+
+<section class="group-section active">
+<header class="group-header">
+<div><div class="group-title"><span class="group-name">Group 2</span><span class="group-state">当前活动</span></div><div class="group-meta"><span>3 Key</span><span>预计剩余 <strong>1,560</strong></span><span>下一组 <strong>Group 3</strong></span></div></div>
+<div class="group-budget">本轮组用量 <strong>384 / 600</strong></div>
+</header>
+<article class="key-row">
+<div class="row-top"><div class="key-line"><span class="key-name">primary-04</span><span class="status state-ready">ready</span></div><span class="row-usage">380 (+12) / 1,000</span></div>
+<div class="usage-progress" role="img" aria-label="实际用量 380，预计总用量 392，额度 1,000"><div class="progress-projected" style="width:39.2%"></div><div class="progress-actual" style="width:38%"></div></div>
+<div class="row-meta"><span>实际更新 <strong>07-15 10:20:15</strong></span><span>预计剩余 <strong>608</strong></span><span>权重 <strong>620</strong></span></div>
+</article>
+<article class="key-row">
+<div class="row-top"><div class="key-line"><span class="key-name">primary-09</span><span class="status state-cooling">cooling</span></div><span class="row-usage">590 (+2) / 1,000</span></div>
+<div class="usage-progress" role="img" aria-label="实际用量 590，预计总用量 592，额度 1,000"><div class="progress-projected" style="width:59.2%"></div><div class="progress-actual" style="width:59%"></div></div>
+<div class="row-meta"><span>实际更新 <strong>07-15 10:20:11</strong></span><span>预计剩余 <strong>408</strong></span><span>权重 <strong>0</strong></span><span>重试时间 <strong>07-15 10:21:06</strong></span></div>
+</article>
+</section>
+
+<section class="group-section">
+<header class="group-header">
+<div><div class="group-title"><span class="group-name">Group 3</span><span class="group-state">等待</span></div><div class="group-meta"><span>2 Key</span><span>预计剩余 <strong>1,250</strong></span></div></div>
+<div class="group-budget">本轮组用量 <strong>0 / 600</strong></div>
+</header>
+<article class="key-row">
+<div class="row-top"><div class="key-line"><span class="key-name">primary-06</span><span class="status state-ready">ready</span></div><span class="row-usage">430 (+0) / 1,000</span></div>
+<div class="usage-progress" role="img" aria-label="实际用量 430，预计总用量 430，额度 1,000"><div class="progress-projected" style="width:43%"></div><div class="progress-actual" style="width:43%"></div></div>
+<div class="row-meta"><span>实际更新 <strong>07-15 10:20:08</strong></span><span>预计剩余 <strong>570</strong></span><span>权重 <strong>0</strong></span></div>
+</article>
+</section>
+
+<section class="group-section">
+<header class="group-header">
+<div><div class="group-title"><span class="group-name">Group 4</span><span class="group-state">等待</span></div><div class="group-meta"><span>2 Key</span><span>预计剩余 <strong>1,210</strong></span></div></div>
+<div class="group-budget">本轮组用量 <strong>0 / 600</strong></div>
+</header>
+<article class="key-row">
+<div class="row-top"><div class="key-line"><span class="key-name">backup-cn</span><span class="status state-pending">pending</span></div><span class="row-usage">尚无用量数据</span></div>
+<div class="usage-progress" role="img" aria-label="用量数据尚不可用" style="opacity:.45"></div>
+<div class="row-meta"><span>实际更新 <strong>--</strong></span><span>预计剩余 <strong>0</strong></span><span>权重 <strong>0</strong></span></div>
+</article>
+</section>
+</section>
+<div class="note">未启用分组时不显示 Group 标题和组级字段，页面保持当前扁平 Key 列表。</div>
+</main>
+</body>
+</html>

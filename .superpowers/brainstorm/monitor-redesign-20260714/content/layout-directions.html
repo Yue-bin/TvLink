@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TvLink 监控页方向</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #090b0c;
+      --surface: #111416;
+      --surface-2: #171b1d;
+      --line: #293034;
+      --text: #eef2ef;
+      --muted: #8f9a94;
+      --actual: #263238;
+      --actual-line: #526168;
+      --estimate: #b9cbc3;
+      --accent: #65d6a6;
+      --warning: #e9b85d;
+      --danger: #ee7d72;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    button { font: inherit; }
+    .page { width: min(1480px, calc(100% - 36px)); margin: 0 auto; padding: 34px 0 52px; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+    h1 { margin: 0 0 7px; font-size: 24px; font-weight: 720; }
+    .intro p { margin: 0; color: var(--muted); font-size: 14px; }
+    .hint { color: #c9d2cd; font-size: 12px; border: 1px solid var(--line); padding: 8px 11px; border-radius: 6px; }
+    .directions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+    .direction {
+      appearance: none;
+      display: block;
+      width: 100%;
+      padding: 0;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      cursor: pointer;
+      overflow: hidden;
+      transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+    }
+    .direction:hover { border-color: #53605a; transform: translateY(-2px); }
+    .direction.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(101, 214, 166, .16); }
+    .direction-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 15px; background: #0d1011; border-bottom: 1px solid var(--line); }
+    .direction-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .letter { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid #44504a; border-radius: 5px; color: var(--accent); font-size: 12px; font-weight: 800; flex: 0 0 auto; }
+    .direction h2 { margin: 0; font-size: 14px; font-weight: 700; }
+    .recommend { color: #09120e; background: var(--accent); border-radius: 4px; padding: 4px 7px; font-size: 10px; font-weight: 800; }
+    .mock { min-height: 610px; padding: 17px; background: var(--surface); }
+    .brandbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .brand { font-size: 13px; font-weight: 760; }
+    .live { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; text-transform: uppercase; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(101,214,166,.10); }
+    .total { padding: 16px; background: #15191b; border: 1px solid #343b3e; border-radius: 7px; margin-bottom: 13px; }
+    .total-top { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
+    .eyebrow { color: var(--muted); font-size: 9px; text-transform: uppercase; font-weight: 700; }
+    .big { margin-top: 5px; font-size: 27px; line-height: 1; font-weight: 760; font-variant-numeric: tabular-nums; }
+    .big span { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .percent { color: var(--accent); font-size: 13px; font-weight: 700; }
+    .bars { display: grid; gap: 7px; }
+    .bar-line { display: grid; grid-template-columns: 46px 1fr; align-items: center; gap: 9px; }
+    .bar-label { color: var(--muted); font-size: 9px; }
+    .track { position: relative; height: 9px; border-radius: 2px; background: #090b0c; overflow: hidden; }
+    .actual-fill { height: 100%; background: var(--actual); border: 1px solid var(--actual-line); border-radius: 2px; }
+    .estimate-fill { height: 100%; border: 1px dashed var(--estimate); border-radius: 2px; background: rgba(185,203,195,.06); }
+    .legend { display: flex; gap: 14px; margin-top: 11px; color: var(--muted); font-size: 9px; }
+    .legend b { color: #d9e0dc; font-weight: 650; }
+    .list { border-top: 1px solid var(--line); }
+    .usage-row { padding: 14px 2px 13px; border-bottom: 1px solid var(--line); }
+    .row-top { display: grid; grid-template-columns: minmax(90px, 1fr) auto; gap: 10px; align-items: center; margin-bottom: 11px; }
+    .keyline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .keyname { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .status { padding: 3px 6px; border-radius: 4px; font-size: 8px; font-weight: 760; text-transform: uppercase; }
+    .ready { color: var(--accent); background: rgba(101,214,166,.10); border: 1px solid rgba(101,214,166,.22); }
+    .cooling { color: var(--warning); background: rgba(233,184,93,.08); border: 1px solid rgba(233,184,93,.22); }
+    .number { color: #dce3df; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .number em { color: var(--estimate); font-style: normal; }
+    .mini-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 9px; color: var(--muted); font-size: 8px; }
+    .meta strong { color: #c4cdc8; font-weight: 650; }
+    .card-grid { display: grid; gap: 10px; }
+    .key-card { padding: 13px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 7px; }
+    .key-card .row-top { margin-bottom: 13px; }
+    .card-number { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+    .card-number strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+    .card-number span { color: var(--muted); font-size: 9px; }
+    .table { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .tr { display: grid; grid-template-columns: 1fr .72fr .72fr; align-items: center; gap: 9px; min-height: 48px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+    .tr:last-child { border-bottom: 0; }
+    .th { min-height: 31px; color: var(--muted); background: #0e1112; font-size: 8px; text-transform: uppercase; }
+    .table-bars { display: grid; gap: 4px; }
+    .table-bars .track { height: 6px; }
+    .align-right { text-align: right; }
+    .direction-foot { padding: 15px; background: #0d1011; border-top: 1px solid var(--line); }
+    .direction-foot strong { display: block; margin-bottom: 5px; font-size: 12px; }
+    .direction-foot p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .select-note { margin-top: 18px; color: var(--muted); text-align: center; font-size: 12px; }
+    @media (max-width: 1040px) { .directions { grid-template-columns: 1fr; } .mock { min-height: auto; } }
+    @media (max-width: 620px) { .page { width: min(100% - 20px, 1480px); padding-top: 22px; } .intro { align-items: start; flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <div>
+        <h1>TvLink 监控页 · 三种方向</h1>
+        <p>真实用量为实线，预计总量为浅色虚线；数字中的括号表示刷新后的预估增量。</p>
+      </div>
+      <div class="hint">点击一个方案进行选择</div>
+    </header>
+
+    <section class="directions">
+      <button class="direction" data-choice="a" onclick="toggleSelect(this)">
+        <div class="direction-head">
+          <div class="direction-title"><span class="letter">A</span><h2>控制台列表</h2></div>
+          <span class="recommend">推荐</span>
+        </div>
+        <div class="mock">
+          <div class="brandbar"><span class="brand">TVLINK / USAGE</span><span class="live"><i class="dot"></i> live</span></div>
+          <div class="total">
+            <div class="total-top"><div><div class="eyebrow">总用量</div><div class="big">740 <span>(+55) / 1,500</span></div></div><div class="percent">53.0% projected</div></div>
+            <div class="bars">
+              <div class="bar-line"><span class="bar-label">实际 49%</span><div class="track"><div class="actual-fill" style="width:49.3%"></div></div></div>
+              <div class="bar-line"><span class="bar-label">预计 53%</span><div class="track"><div class="estimate-fill" style="width:53%"></div></div></div>
+            </div>
+            <div class="legend"><span>预计剩余 <b>705</b></span><span>可用 Key <b>2 / 3</b></span><span>5 秒刷新</span></div>
+          </div>
+          <div class="list">
+            <div class="usage-row">
+              <div class="row-top"><div class="keyline"><span class="keyname">primary-01</span><span class="status ready">ready</span></div><span class="number">210 <em>(+18)</em> / 500</span></div>
+              <div class="mini-bars"><div class="track"><div class="actual-fill" style="width:42%"></div></div><div class="track"><div class="estimate-fill" style="width:45.6%"></div></div></div>
+              <div class="meta"><span>实际更新 <strong>12 秒前</strong></span><span>预计剩余 <strong>272</strong></span><span>权重 <strong>272.00</strong></span></div>
+            </div>
+            <div class="usage-row">
+              <div class="row-top"><div class="keyline"><span class="keyname">primary-02</span><span class="status ready">ready</span></div><span class="number">330 <em>(+37)</em> / 500</span></div>
+              <div class="mini-bars"><div class="track"><div class="actual-fill" style="width:66%"></div></div><div class="track"><div class="estimate-fill" style="width:73.4%"></div></div></div>
+              <div class="meta"><span>实际更新 <strong>18 秒前</strong></span><span>预计剩余 <strong>133</strong></span><span>权重 <strong>133.00</strong></span></div>
+            </div>
+            <div class="usage-row">
+              <div class="row-top"><div class="keyline"><span class="keyname">backup-cn</span><span class="status cooling">cooling</span></div><span class="number">200 <em>(+0)</em> / 500</span></div>
+              <div class="mini-bars"><div class="track"><div class="actual-fill" style="width:40%"></div></div><div class="track"><div class="estimate-fill" style="width:40%"></div></div></div>
+              <div class="meta"><span>实际更新 <strong>23 秒前</strong></span><span>预计剩余 <strong>300</strong></span><span>重试 <strong>42 秒后</strong></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="direction-foot"><strong>最适合日常监控</strong><p>总量明确，每个 Key 一眼可扫完；次要数据仍随手可见，Key 增多时也不会变得笨重。</p></div>
+      </button>
+
+      <button class="direction" data-choice="b" onclick="toggleSelect(this)">
+        <div class="direction-head"><div class="direction-title"><span class="letter">B</span><h2>仪表卡片</h2></div></div>
+        <div class="mock">
+          <div class="brandbar"><span class="brand">TVLINK / USAGE</span><span class="live"><i class="dot"></i> live</span></div>
+          <div class="total">
+            <div class="total-top"><div><div class="eyebrow">总用量</div><div class="big">740 <span>(+55) / 1,500</span></div></div><div class="percent">53.0%</div></div>
+            <div class="bars"><div class="track"><div class="actual-fill" style="width:49.3%"></div></div><div class="track"><div class="estimate-fill" style="width:53%"></div></div></div>
+            <div class="legend"><span>预计剩余 <b>705</b></span><span>可用 <b>2 / 3</b></span></div>
+          </div>
+          <div class="card-grid">
+            <div class="key-card">
+              <div class="row-top"><div class="keyline"><span class="keyname">primary-01</span><span class="status ready">ready</span></div><span class="percent">45.6%</span></div>
+              <div class="card-number"><strong>210 <em style="color:var(--estimate);font-style:normal">(+18)</em></strong><span>/ 500</span></div>
+              <div class="bars"><div class="track"><div class="actual-fill" style="width:42%"></div></div><div class="track"><div class="estimate-fill" style="width:45.6%"></div></div></div>
+              <div class="meta"><span>剩余 <strong>272</strong></span><span>更新 <strong>12 秒前</strong></span></div>
+            </div>
+            <div class="key-card">
+              <div class="row-top"><div class="keyline"><span class="keyname">primary-02</span><span class="status ready">ready</span></div><span class="percent">73.4%</span></div>
+              <div class="card-number"><strong>330 <em style="color:var(--estimate);font-style:normal">(+37)</em></strong><span>/ 500</span></div>
+              <div class="bars"><div class="track"><div class="actual-fill" style="width:66%"></div></div><div class="track"><div class="estimate-fill" style="width:73.4%"></div></div></div>
+              <div class="meta"><span>剩余 <strong>133</strong></span><span>更新 <strong>18 秒前</strong></span></div>
+            </div>
+            <div class="key-card">
+              <div class="row-top"><div class="keyline"><span class="keyname">backup-cn</span><span class="status cooling">cooling</span></div><span style="color:var(--warning);font-size:10px">42 秒后重试</span></div>
+              <div class="bars"><div class="track"><div class="actual-fill" style="width:40%"></div></div><div class="track"><div class="estimate-fill" style="width:40%"></div></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="direction-foot"><strong>视觉感更强</strong><p>每个 Key 都是独立模块，状态很醒目；但 Key 较多时页面会拉得很长，横向比较也稍慢。</p></div>
+      </button>
+
+      <button class="direction" data-choice="c" onclick="toggleSelect(this)">
+        <div class="direction-head"><div class="direction-title"><span class="letter">C</span><h2>遥测表格</h2></div></div>
+        <div class="mock">
+          <div class="brandbar"><span class="brand">TVLINK / TELEMETRY</span><span class="live"><i class="dot"></i> live</span></div>
+          <div class="total">
+            <div class="total-top"><div><div class="eyebrow">总用量</div><div class="big">740 <span>(+55) / 1,500</span></div></div><div class="percent">53.0%</div></div>
+            <div class="bars"><div class="track"><div class="actual-fill" style="width:49.3%"></div></div><div class="track"><div class="estimate-fill" style="width:53%"></div></div></div>
+          </div>
+          <div class="table">
+            <div class="tr th"><span>Key / 状态</span><span>用量</span><span class="align-right">剩余 / 权重</span></div>
+            <div class="tr"><div><div class="keyname">primary-01</div><span class="status ready">ready</span></div><div><div class="number">210 <em>(+18)</em> / 500</div><div class="table-bars"><div class="track"><div class="actual-fill" style="width:42%"></div></div><div class="track"><div class="estimate-fill" style="width:45.6%"></div></div></div></div><div class="align-right"><div class="number">272</div><div class="meta" style="justify-content:flex-end;margin-top:4px">272.00</div></div></div>
+            <div class="tr"><div><div class="keyname">primary-02</div><span class="status ready">ready</span></div><div><div class="number">330 <em>(+37)</em> / 500</div><div class="table-bars"><div class="track"><div class="actual-fill" style="width:66%"></div></div><div class="track"><div class="estimate-fill" style="width:73.4%"></div></div></div></div><div class="align-right"><div class="number">133</div><div class="meta" style="justify-content:flex-end;margin-top:4px">133.00</div></div></div>
+            <div class="tr"><div><div class="keyname">backup-cn</div><span class="status cooling">cooling</span></div><div><div class="number">200 <em>(+0)</em> / 500</div><div class="table-bars"><div class="track"><div class="actual-fill" style="width:40%"></div></div><div class="track"><div class="estimate-fill" style="width:40%"></div></div></div></div><div class="align-right"><div class="number">300</div><div style="color:var(--warning);font-size:8px;margin-top:4px">retry 42s</div></div></div>
+          </div>
+          <div class="meta" style="margin-top:12px"><span>最新真实用量更新：<strong>12 秒前</strong></span><span>自动刷新：<strong>5 秒</strong></span></div>
+        </div>
+        <div class="direction-foot"><strong>最适合大量 Key</strong><p>密度最高，十几个 Key 也容易比较；代价是视觉层级偏表格化，整体没有 A 那么轻松。</p></div>
+      </button>
+    </section>
+    <p class="select-note">选择你最接近的方向即可，我们还会继续微调颜色、进度条和细节。</p>
+  </main>
+</body>
+</html>

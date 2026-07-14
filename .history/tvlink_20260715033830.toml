@@ -1,0 +1,20 @@
+listen_addr = ":8080"
+tvlink_api_key = "tv-yeah"
+usage_refresh_interval = "90s"
+research_mapping_ttl = "24h"
+request_body_limit = "32MiB"
+key_group_size = 2
+group_usage_limit = 600
+group_rotation_timezone = "Asia/Shanghai"
+
+[[tavily_keys]]
+name = "primary-01"
+api_key = "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"
+
+[[tavily_keys]]
+name = "primary-02"
+api_key = "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"
+
+[[tavily_keys]]
+name = "primary-03"
+api_key = "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"
