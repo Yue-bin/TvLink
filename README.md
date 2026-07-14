@@ -9,19 +9,21 @@ TvLink 是一个 Tavily API Key 池服务，向客户端提供统一的 REST 与
 - 为多个 Tavily API Key 按可用额度分配请求；遇到限流时自动切换并冷却 Key。
 - 代理 Tavily REST 接口：`/search`、`/extract`、`/crawl`、`/map` 和 `/research`。
 - 在 `/mcp` 提供经过认证的 Streamable HTTP MCP 服务。
-- 根路径 `/` 提供自动刷新的用量监控页。
+- 根路径 `/` 提供静态交互式用量监控页，可查看全部 Key 或按组筛选。
 
 ## 配置
 
 从 [`tvlink.example.toml`](tvlink.example.toml) 创建 `tvlink.toml`，至少设置客户端使用的 `tvlink_api_key`，以及一个或多个 `tavily_keys`。
 
-客户端调用 REST 和 MCP 时使用 `Authorization: Bearer <tvlink_api_key>`。默认监听 `:8080`；监控页地址为 `http://<host>:8080/`。
+客户端调用 REST 和 MCP 时使用 `Authorization: Bearer <tvlink_api_key>`。默认监听 `:8080`；监控页地址为 `http://<host>:8080/`。页面不会自动刷新；需要最新用量时手动刷新浏览器。
 
 ### Key 分组轮换
 
 可选地配置 `key_group_size`、`group_usage_limit` 和 `group_rotation_timezone`，让 TvLink 将可用 Key 按剩余额度均衡分组，并在当前组累计消耗固定的预估 Tavily credits 后轮换下一组。时区使用 IANA 名称，例如 `Asia/Shanghai`；月度边界和所有组完成一轮后会刷新用量并重新均衡分组。单把 Key 耗尽不会立刻重分组。
 
 分组只控制同一出站 IP 下的 Key 使用节奏，不会改变服务的出站 IP。
+
+启用分组后，监控页左侧以竖排列表显示各组汇总用量，并保留真实/预估双层进度条；右侧可在全部 Key 和单个组之间切换。移动端使用下拉选择，页面筛选完全在已渲染的静态 HTML 内完成。
 
 ## 部署
 
