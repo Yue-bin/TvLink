@@ -93,3 +93,56 @@ api_key = "tvly-two"
 		})
 	}
 }
+
+func TestLoadGrouping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tvlink.toml")
+	content := `listen_addr = ":8080"
+tvlink_api_key = "tlk-client"
+key_group_size = 3
+group_usage_limit = 600
+group_rotation_timezone = "Asia/Shanghai"
+
+[[tavily_keys]]
+name = "primary-01"
+api_key = "tvly-one"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write configuration: %v", err)
+	}
+
+	settings, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settings.GroupingEnabled() {
+		t.Fatal("GroupingEnabled() = false, want true")
+	}
+	if settings.KeyGroupSize != 3 {
+		t.Errorf("KeyGroupSize = %d, want 3", settings.KeyGroupSize)
+	}
+	if settings.GroupUsageLimit != 600 {
+		t.Errorf("GroupUsageLimit = %v, want 600", settings.GroupUsageLimit)
+	}
+	if settings.GroupRotationTimezone != "Asia/Shanghai" {
+		t.Errorf("GroupRotationTimezone = %q, want Asia/Shanghai", settings.GroupRotationTimezone)
+	}
+}
+
+func TestLoadRejectsInvalidGrouping(t *testing.T) {
+	tests := []string{
+		"key_group_size = 0\ngroup_usage_limit = 600\ngroup_rotation_timezone = \"Asia/Shanghai\"",
+		"key_group_size = 3\ngroup_usage_limit = 0\ngroup_rotation_timezone = \"Asia/Shanghai\"",
+		"key_group_size = 3\ngroup_usage_limit = 600\ngroup_rotation_timezone = \"Mars/Olympus\"",
+		"group_rotation_timezone = \"Asia/Shanghai\"",
+	}
+	for _, grouping := range tests {
+		path := filepath.Join(t.TempDir(), "tvlink.toml")
+		content := "listen_addr = \":8080\"\ntvlink_api_key = \"tlk-client\"\n" + grouping + "\n\n[[tavily_keys]]\nname = \"primary-01\"\napi_key = \"tvly-one\"\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write configuration: %v", err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("Load() error = nil for grouping %q", grouping)
+		}
+	}
+}

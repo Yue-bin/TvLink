@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,9 @@ type Config struct {
 	ResearchMappingTTL     time.Duration `toml:"research_mapping_ttl"`
 	MonitorRefreshInterval time.Duration `toml:"monitor_refresh_interval"`
 	RequestBodyLimit       ByteSize      `toml:"request_body_limit"`
+	KeyGroupSize           int           `toml:"key_group_size"`
+	GroupUsageLimit        float64       `toml:"group_usage_limit"`
+	GroupRotationTimezone  string        `toml:"group_rotation_timezone"`
 }
 
 // TavilyKey identifies a single upstream Tavily credential.
@@ -91,6 +95,11 @@ func Load(path string) (Config, error) {
 	return config, nil
 }
 
+// GroupingEnabled reports whether any key-group setting was configured.
+func (c Config) GroupingEnabled() bool {
+	return c.KeyGroupSize != 0 || c.GroupUsageLimit != 0 || strings.TrimSpace(c.GroupRotationTimezone) != ""
+}
+
 func (c Config) validate() error {
 	if strings.TrimSpace(c.ListenAddr) == "" {
 		return fmt.Errorf("listen_addr is required")
@@ -109,6 +118,20 @@ func (c Config) validate() error {
 	}
 	if c.RequestBodyLimit <= 0 {
 		return fmt.Errorf("request_body_limit must be positive")
+	}
+	if c.GroupingEnabled() {
+		if c.KeyGroupSize <= 0 {
+			return fmt.Errorf("key_group_size must be positive when grouping is enabled")
+		}
+		if c.GroupUsageLimit <= 0 || math.IsNaN(c.GroupUsageLimit) || math.IsInf(c.GroupUsageLimit, 0) {
+			return fmt.Errorf("group_usage_limit must be a finite positive number when grouping is enabled")
+		}
+		if strings.TrimSpace(c.GroupRotationTimezone) == "" {
+			return fmt.Errorf("group_rotation_timezone is required when grouping is enabled")
+		}
+		if _, err := time.LoadLocation(c.GroupRotationTimezone); err != nil {
+			return fmt.Errorf("load group_rotation_timezone %q: %w", c.GroupRotationTimezone, err)
+		}
 	}
 	if len(c.TavilyKeys) == 0 {
 		return fmt.Errorf("at least one tavily_keys entry is required")
