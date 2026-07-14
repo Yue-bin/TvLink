@@ -119,3 +119,59 @@ func TestRebuildGroupsBalancesRemainingCapacity(t *testing.T) {
 		t.Errorf("assigned keys = %d, want %d", len(seen), len(keys))
 	}
 }
+
+func TestSelectUsesActiveGroupAndRollsBackRateLimit(t *testing.T) {
+	now := time.Now()
+	keys := []Key{{Name: "one", APIKey: "tvly-one"}, {Name: "two", APIKey: "tvly-two"}}
+	p := New(keys, 1)
+	for _, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 100, Used: 0}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 10, Location: time.UTC}); err != nil {
+		t.Fatalf("ConfigureGroups() error = %v", err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatalf("RebuildGroups() error = %v", err)
+	}
+
+	lease, err := p.Select(now, 3)
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if _, ok := p.groups[p.activeGroup].keys[lease.Key.Name]; !ok {
+		t.Errorf("selected key %q is not in active group", lease.Key.Name)
+	}
+	if got := p.groups[p.activeGroup].reserved; got != 3 {
+		t.Errorf("group reserved = %v, want 3", got)
+	}
+	p.Resolve(lease, 429, time.Minute, now)
+	if got := p.groups[p.activeGroup].reserved; got != 0 {
+		t.Errorf("group reserved after 429 = %v, want 0", got)
+	}
+}
+
+func TestSelectRotatesBeforeCrossingGroupLimit(t *testing.T) {
+	now := time.Now()
+	keys := []Key{{Name: "one", APIKey: "tvly-one"}, {Name: "two", APIKey: "tvly-two"}}
+	p := New(keys, 1)
+	for _, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 100, Used: 0}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 2, Location: time.UTC}); err != nil {
+		t.Fatalf("ConfigureGroups() error = %v", err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatalf("RebuildGroups() error = %v", err)
+	}
+	first, err := p.Select(now, 2)
+	if err != nil {
+		t.Fatalf("first Select() error = %v", err)
+	}
+	second, err := p.Select(now, 1)
+	if err != nil {
+		t.Fatalf("second Select() error = %v", err)
+	}
+	if first.Key.Name == second.Key.Name {
+		t.Errorf("second selection reused spent group key %q", second.Key.Name)
+	}
+}
