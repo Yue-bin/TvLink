@@ -54,7 +54,6 @@ type rotationView struct {
 	CursorLeft    template.CSS
 	RoundUsage    string
 	RoundTotal    string
-	RoundLeft     string
 	ActiveName    string
 	ActivePercent string
 }
@@ -155,7 +154,6 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		view.Rotation.CursorLeft = template.CSS(fmt.Sprintf("left:%.2f%%", percentageOf(roundUsed, roundTotal)))
 		view.Rotation.RoundUsage = formatFloat(roundUsed)
 		view.Rotation.RoundTotal = formatFloat(roundTotal)
-		view.Rotation.RoundLeft = formatFloat(max(0, roundTotal-roundUsed))
 		if view.Rotation.ActiveName == "" {
 			view.Rotation.ActiveName = "本轮已轮转完毕"
 		}

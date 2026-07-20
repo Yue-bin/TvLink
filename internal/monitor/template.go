@@ -386,7 +386,6 @@ const pageHTML = `<!doctype html>
           </div>
           <div class="ma-detail">
             <div class="ma-r"><span>本轮已消耗</span><b>{{.Rotation.RoundUsage}} / {{.Rotation.RoundTotal}}</b></div>
-            <div class="ma-r"><span>本轮剩余</span><b>{{.Rotation.RoundLeft}}</b></div>
           </div>
         </div>
         {{end}}
