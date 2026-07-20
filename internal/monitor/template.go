@@ -191,6 +191,53 @@ const pageHTML = `<!doctype html>
     .all-option { padding: 13px 10px; }
     .all-option .group-name { font-size: 13px; }
     .all-option .group-meta { justify-content: flex-start; gap: 14px; }
+    .mini-axis-card {
+      padding: 13px 14px 12px;
+      margin-bottom: 14px;
+      background: var(--panel);
+      border: 1px solid var(--edge);
+      border-radius: 7px;
+    }
+    .ma-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .ma-head .ma-t { color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .ma-head .ma-v { color: var(--accent); font-size: 10px; font-weight: 700; }
+    .ma-track { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); grid-auto-flow: column; gap: 3px; margin-top: 11px; }
+    .ma-cell {
+      position: relative;
+      display: grid;
+      place-items: center;
+      height: 18px;
+      overflow: hidden;
+      background: var(--track);
+      border: 1px solid var(--edge);
+      border-radius: 3px;
+    }
+    .ma-cell span { position: relative; z-index: 1; color: var(--muted); font-size: 8px; font-weight: 700; }
+    .ma-cell.done { background: rgba(119, 210, 173, .1); border-color: rgba(119, 210, 173, .3); }
+    .ma-cell.done span { color: var(--ready); }
+    .ma-cell.now { border-color: var(--accent); }
+    .ma-cell.now .ma-fill { position: absolute; top: 0; bottom: 0; left: 0; background: rgba(112, 201, 243, .18); }
+    .ma-cell.now span { color: var(--accent); }
+    .ma-cursor { position: absolute; z-index: 2; top: -3px; bottom: -3px; width: 2px; background: var(--accent); }
+    .ma-cursor::before {
+      content: "";
+      position: absolute;
+      top: -3.5px;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 3px solid transparent;
+      border-top-color: var(--accent);
+    }
+    .ma-detail {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px 12px;
+      margin-top: 11px;
+      padding-top: 10px;
+      border-top: 1px solid var(--edge);
+    }
+    .ma-detail .ma-r { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+    .ma-detail .ma-r b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
     .mobile-filter { display: none; margin-top: 18px; }
     .mobile-filter label {
       display: block;
@@ -323,6 +370,26 @@ const pageHTML = `<!doctype html>
       {{if .GroupingEnabled}}
       <aside class="group-panel">
         <div class="panel-title"><span>显示范围</span><span>{{len .Groups}} 组</span></div>
+        {{if .HasActiveGroup}}
+        <div class="mini-axis-card">
+          <div class="ma-head"><span class="ma-t">轮换进度</span><span class="ma-v">{{.Rotation.ActiveName}} · {{.Rotation.ActivePercent}}</span></div>
+          <div class="ma-track">
+            {{range .Groups}}
+            <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
+              {{if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
+              <span>{{if .Spent}}✓{{else}}{{.ShortName}}{{end}}</span>
+            </div>
+            {{end}}
+            <div class="ma-cursor" style="{{.Rotation.CursorLeft}}"></div>
+          </div>
+          <div class="ma-detail">
+            <div class="ma-r"><span>本轮</span><b>{{.Rotation.RoundUsage}}</b></div>
+            <div class="ma-r"><span>剩余</span><b>{{.Rotation.RoundLeft}} 次</b></div>
+            <div class="ma-r"><span>组 Key 用量</span><b>{{.Rotation.GroupUsage}}</b></div>
+            <div class="ma-r"><span>Ready</span><b>{{.Rotation.ReadyText}}</b></div>
+          </div>
+        </div>
+        {{end}}
         <nav class="group-filter" aria-label="Key 分组筛选">
           <button class="group-option all-option active" type="button" data-filter="all" data-title="所有 Key" data-description="按名称展示全部脱敏 Key" onclick="setFilter('all')">
             <div class="group-top"><span class="group-name">所有 Key</span><span class="group-state">{{.TotalKeys}}</span></div>

@@ -38,14 +38,26 @@ type keyView struct {
 type groupView struct {
 	ID           string
 	Name         string
+	ShortName    string
 	State        string
 	StateClass   string
 	Active       bool
+	Spent        bool
 	RoundMetrics progressView
 	QuotaUsage   string
 	KeyCount     int
 	ReadyKeys    int
 	Remaining    string
+}
+
+type rotationView struct {
+	CursorLeft    template.CSS
+	ActiveName    string
+	ActivePercent string
+	RoundUsage    string
+	RoundLeft     string
+	GroupUsage    string
+	ReadyText     string
 }
 
 type pageView struct {
@@ -58,6 +70,8 @@ type pageView struct {
 	Groups             []groupView
 	GroupingEnabled    bool
 	ActiveGroupName    string
+	Rotation           rotationView
+	HasActiveGroup     bool
 	Empty              bool
 }
 
@@ -117,9 +131,11 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		view.Groups = append(view.Groups, groupView{
 			ID:           fmt.Sprintf("group-%d", group.Index),
 			Name:         name,
+			ShortName:    strconv.Itoa(group.Index),
 			State:        state,
 			StateClass:   stateClass,
 			Active:       group.Active,
+			Spent:        group.Spent,
 			RoundMetrics: newRoundProgressView(group.RoundUsage, group.RoundLimit),
 			QuotaUsage:   newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit).UsageText,
 			KeyCount:     group.KeyCount,
@@ -128,6 +144,19 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		})
 		if group.Active {
 			view.ActiveGroupName = name
+			view.HasActiveGroup = true
+			roundPercent := percentageOf(group.RoundUsage, group.RoundLimit)
+			groupWidth := 100 / float64(len(snapshot.Groups))
+			cursor := (float64(group.Index-1) + roundPercent/100) * groupWidth
+			view.Rotation = rotationView{
+				CursorLeft:    template.CSS(fmt.Sprintf("left:%.2f%%", cursor)),
+				ActiveName:    name,
+				ActivePercent: formatPercent(roundPercent),
+				RoundUsage:    fmt.Sprintf("%s / %s", formatFloat(group.RoundUsage), formatFloat(group.RoundLimit)),
+				RoundLeft:     formatFloat(max(0, group.RoundLimit-group.RoundUsage)),
+				GroupUsage:    newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit).UsageText,
+				ReadyText:     fmt.Sprintf("%d / %d", group.ReadyKeys, group.KeyCount),
+			}
 		}
 	}
 	view.Total = newProgressView(totalActual, totalEstimated, totalLimit)
