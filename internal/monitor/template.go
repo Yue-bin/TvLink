@@ -92,11 +92,13 @@ const pageHTML = `<!doctype html>
     .progress-projected {
       position: absolute;
       z-index: 1;
-      inset: -1px auto -1px -1px;
-      border: 1px dashed var(--estimate);
-      border-radius: 3px;
-      background: rgba(182, 217, 233, .035);
+      top: 3px;
+      bottom: 3px;
+      left: 0;
+      border-right: 1.5px solid var(--estimate);
+      background: rgba(182, 217, 233, .06);
     }
+    .compact .progress-projected { top: 2px; bottom: 2px; }
     .progress-actual {
       position: absolute;
       z-index: 2;
@@ -127,7 +129,7 @@ const pageHTML = `<!doctype html>
       border-radius: 1px;
     }
     .legend-actual { background: var(--actual); border: 1px solid var(--actual-edge); }
-    .legend-projected { border: 1px dashed var(--estimate); }
+    .legend-projected { background: rgba(182, 217, 233, .06); border-right: 1.5px solid var(--estimate); }
     .workspace { margin-top: 18px; }
     .workspace.grouped {
       display: grid;
