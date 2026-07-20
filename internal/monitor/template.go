@@ -287,6 +287,11 @@ const pageHTML = `<!doctype html>
       border: 1px solid rgba(255, 181, 95, .24);
       background: rgba(255, 181, 95, .08);
     }
+    .research-paused {
+      color: var(--warning);
+      border: 1px solid rgba(255, 181, 95, .24);
+      background: rgba(255, 181, 95, .08);
+    }
     .state-exhausted {
       color: var(--danger);
       border: 1px solid rgba(255, 144, 128, .24);
@@ -424,7 +429,7 @@ const pageHTML = `<!doctype html>
         {{range .Rows}}
         <article class="key-row"{{if .GroupID}} data-group="{{.GroupID}}"{{end}}>
           <div class="row-top">
-            <div class="key-line"><span class="key-name">{{.Name}}</span><span class="status {{.StateClass}}">{{.State}}</span>{{if $.GroupingEnabled}}<span class="group-badge">{{.GroupName}}</span>{{end}}</div>
+            <div class="key-line"><span class="key-name">{{.Name}}</span><span class="status {{.StateClass}}">{{.State}}</span>{{if .ResearchBlocked}}<span class="status research-paused">RESEARCH PAUSED</span>{{end}}{{if $.GroupingEnabled}}<span class="group-badge">{{.GroupName}}</span>{{end}}</div>
             <span class="row-usage">{{.Metrics.UsageText}}</span>
           </div>
           <div class="usage-progress{{if .Metrics.Unavailable}} unavailable{{end}}" role="img" aria-label="{{.Metrics.AriaLabel}}">
@@ -435,6 +440,7 @@ const pageHTML = `<!doctype html>
             <span>实际更新 <strong>{{.UpdatedAt}}</strong></span>
             <span>预计剩余 <strong>{{.Remaining}}</strong></span>
             <span>权重 <strong>{{.Weight}}</strong></span>
+            {{if .ShowResearchReserved}}<span>Research 预留 <strong>{{.ResearchReserved}}</strong></span>{{end}}
             {{if .ShowRetry}}<span>重试时间 <strong>{{.RetryAt}}</strong></span>{{end}}
           </div>
         </article>

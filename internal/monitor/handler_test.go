@@ -81,3 +81,26 @@ func TestHandlerRendersEmptyState(t *testing.T) {
 		t.Fatal("page does not contain empty state")
 	}
 }
+
+func TestHandlerRendersResearchRoutingState(t *testing.T) {
+	now := time.Now()
+	p := pool.New([]pool.Key{{Name: "primary-01", APIKey: "tvly-secret"}}, 1)
+	p.UpdateUsage("primary-01", pool.Usage{Limit: 1000, Used: 100}, now)
+	if _, err := p.SelectFor(now, pool.Selection{Estimate: 110, Workload: pool.WorkloadResearch}); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := p.SelectFor(now, pool.Selection{Estimate: 250, Workload: pool.WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(rejected, 432, 0, now)
+
+	response := httptest.NewRecorder()
+	New(p).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := html.UnescapeString(response.Body.String())
+	for _, text := range []string{"RESEARCH PAUSED", "Research 预留", "110"} {
+		if !strings.Contains(body, text) {
+			t.Errorf("page does not contain %q", text)
+		}
+	}
+}

@@ -22,17 +22,20 @@ type progressView struct {
 }
 
 type keyView struct {
-	Name       string
-	GroupID    string
-	GroupName  string
-	State      string
-	StateClass string
-	Metrics    progressView
-	UpdatedAt  string
-	Remaining  string
-	Weight     string
-	RetryAt    string
-	ShowRetry  bool
+	Name                 string
+	GroupID              string
+	GroupName            string
+	State                string
+	StateClass           string
+	Metrics              progressView
+	UpdatedAt            string
+	Remaining            string
+	Weight               string
+	RetryAt              string
+	ShowRetry            bool
+	ResearchReserved     string
+	ShowResearchReserved bool
+	ResearchBlocked      bool
 }
 
 type groupView struct {
@@ -103,17 +106,20 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 			groupName = fmt.Sprintf("Group %d", key.Group)
 		}
 		view.Rows = append(view.Rows, keyView{
-			Name:       key.Name,
-			GroupID:    groupID,
-			GroupName:  groupName,
-			State:      string(key.State),
-			StateClass: "state-" + string(key.State),
-			Metrics:    metrics,
-			UpdatedAt:  formatTimestamp(key.RealUsageAt),
-			Remaining:  formatFloat(key.Remaining),
-			Weight:     formatFloat(key.Weight),
-			RetryAt:    formatTimestamp(key.RetryAt),
-			ShowRetry:  key.State == pool.StateCooling,
+			Name:                 key.Name,
+			GroupID:              groupID,
+			GroupName:            groupName,
+			State:                string(key.State),
+			StateClass:           "state-" + string(key.State),
+			Metrics:              metrics,
+			UpdatedAt:            formatTimestamp(key.RealUsageAt),
+			Remaining:            formatFloat(key.Remaining),
+			Weight:               formatFloat(key.Weight),
+			RetryAt:              formatTimestamp(key.RetryAt),
+			ShowRetry:            key.State == pool.StateCooling,
+			ResearchReserved:     formatFloat(key.ResearchReserved),
+			ShowResearchReserved: key.ResearchReserved > 0,
+			ResearchBlocked:      key.ResearchBlocked,
 		})
 	}
 	var roundUsed, roundTotal float64

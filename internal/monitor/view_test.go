@@ -10,7 +10,7 @@ import (
 func TestNewPageViewAggregatesUsageAndBuildsRows(t *testing.T) {
 	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.Local)
 	snapshots := []pool.Snapshot{
-		{Name: "primary-01", Limit: 500, RealUsage: 210, EstimatedUsage: 18, Remaining: 272, Weight: 0, State: pool.StateReady, RealUsageAt: now.Add(-12 * time.Second)},
+		{Name: "primary-01", Limit: 500, RealUsage: 210, EstimatedUsage: 18, Remaining: 272, Weight: 0, State: pool.StateReady, RealUsageAt: now.Add(-12 * time.Second), ResearchReserved: 110, ResearchBlocked: true},
 		{Name: "primary-02", Limit: 500, RealUsage: 330, EstimatedUsage: 37, Remaining: 133, Weight: 0, State: pool.StateReady, RealUsageAt: now.Add(-18 * time.Second)},
 		{Name: "backup-cn", Limit: 500, RealUsage: 200, EstimatedUsage: 0, Remaining: 300, Weight: 999, State: pool.StateCooling, RealUsageAt: now.Add(-23 * time.Second), RetryAt: now.Add(42 * time.Second)},
 	}
@@ -31,6 +31,9 @@ func TestNewPageViewAggregatesUsageAndBuildsRows(t *testing.T) {
 	}
 	if view.Rows[0].Metrics.ActualWidth != "width:42.00%" || view.Rows[0].Metrics.ProjectedWidth != "width:45.60%" {
 		t.Errorf("first row widths = %q, %q", view.Rows[0].Metrics.ActualWidth, view.Rows[0].Metrics.ProjectedWidth)
+	}
+	if view.Rows[0].ResearchReserved != "110" || !view.Rows[0].ShowResearchReserved || !view.Rows[0].ResearchBlocked {
+		t.Errorf("first row research state = %+v", view.Rows[0])
 	}
 	if !view.Rows[2].ShowRetry || view.Rows[2].RetryAt != "07-14 12:00:42" {
 		t.Errorf("cooling retry = show %v, value %q", view.Rows[2].ShowRetry, view.Rows[2].RetryAt)
