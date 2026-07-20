@@ -12,8 +12,9 @@ import (
 )
 
 type fakeResearchRunner struct {
-	result []byte
-	err    error
+	result   []byte
+	err      error
+	statuses []string
 }
 
 func (f fakeResearchRunner) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
@@ -21,8 +22,13 @@ func (f fakeResearchRunner) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (f fakeResearchRunner) RunResearch(_ context.Context, _ []byte, progress func(string)) ([]byte, error) {
-	progress("pending")
-	progress("in_progress")
+	statuses := f.statuses
+	if len(statuses) == 0 {
+		statuses = []string{"pending", "in_progress"}
+	}
+	for _, status := range statuses {
+		progress(status)
+	}
 	return f.result, f.err
 }
 
@@ -129,7 +135,10 @@ func TestCallToolReturnsStructuredContentForJSONResponse(t *testing.T) {
 }
 
 func TestResearchReportsProgressOverSSE(t *testing.T) {
-	runner := fakeResearchRunner{result: []byte(`{"request_id":"research-1","created_at":"2026-07-21T00:00:00Z","status":"completed","content":"report","sources":[],"response_time":1.2}`)}
+	runner := fakeResearchRunner{
+		result:   []byte(`{"request_id":"research-1","created_at":"2026-07-21T00:00:00Z","status":"completed","content":"report","sources":[],"response_time":1.2}`),
+		statuses: []string{"pending", "pending", "in_progress", "in_progress"},
+	}
 	handler := New("tlk-client", "1.2.3", runner)
 	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"tavily_research","arguments":{"input":"test"},"_meta":{"progressToken":"research-progress"}}}`))
 	request.Header.Set("Authorization", "Bearer tlk-client")
@@ -141,23 +150,31 @@ func TestResearchReportsProgressOverSSE(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
 	}
 	messages := decodeSSEMessages(t, response.Body.String())
-	if len(messages) != 3 {
-		t.Fatalf("SSE messages = %d, want 3: %s", len(messages), response.Body.String())
+	if len(messages) != 4 {
+		t.Fatalf("SSE messages = %d, want 4: %s", len(messages), response.Body.String())
 	}
-	for index, wantMessage := range []string{"pending", "in_progress"} {
+	wantProgress := []struct {
+		progress float64
+		message  string
+	}{
+		{progress: 1, message: "pending"},
+		{progress: 2, message: "in_progress"},
+		{progress: 3, message: "completed"},
+	}
+	for index, want := range wantProgress {
 		message := messages[index]
 		if message["method"] != "notifications/progress" {
 			t.Errorf("message %d method = %#v", index, message["method"])
 		}
 		params := message["params"].(map[string]any)
-		if params["progressToken"] != "research-progress" || params["progress"] != float64(index+1) || params["message"] != wantMessage {
+		if params["progressToken"] != "research-progress" || params["progress"] != want.progress || params["total"] != float64(3) || params["message"] != want.message {
 			t.Errorf("message %d params = %#v", index, params)
 		}
 	}
-	if messages[2]["id"] != float64(7) {
-		t.Errorf("final id = %#v, want 7", messages[2]["id"])
+	if messages[3]["id"] != float64(7) {
+		t.Errorf("final id = %#v, want 7", messages[3]["id"])
 	}
-	result := messages[2]["result"].(map[string]any)
+	result := messages[3]["result"].(map[string]any)
 	content := result["content"].([]any)[0].(map[string]any)
 	if content["text"] != "report" {
 		t.Errorf("final text = %#v, want report", content["text"])

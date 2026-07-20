@@ -138,19 +138,35 @@ func (h *Handler) streamResearch(w http.ResponseWriter, r *http.Request, id json
 		return true
 	}
 	token, reportsProgress := validProgressToken(progressToken)
-	progress := 0
+	const progressTotal = 3
+	lastProgress := 0
 	var streamErr error
 	report := func(status string) {
 		if !reportsProgress || streamErr != nil {
 			return
 		}
-		progress++
+		progress := 0
+		switch status {
+		case "pending":
+			progress = 1
+		case "in_progress":
+			progress = 2
+		case "completed":
+			progress = progressTotal
+		default:
+			return
+		}
+		if progress <= lastProgress {
+			return
+		}
+		lastProgress = progress
 		if !writeAndFlush(map[string]any{
 			"jsonrpc": "2.0",
 			"method":  "notifications/progress",
 			"params": map[string]any{
 				"progressToken": token,
 				"progress":      progress,
+				"total":         progressTotal,
 				"message":       status,
 			},
 		}) {
@@ -168,6 +184,10 @@ func (h *Handler) streamResearch(w http.ResponseWriter, r *http.Request, id json
 	result, err := researchResult(completed)
 	if err != nil {
 		writeAndFlush(errorMessage(id, -32603, err.Error()))
+		return
+	}
+	report("completed")
+	if streamErr != nil {
 		return
 	}
 	writeAndFlush(resultMessage(id, result))
