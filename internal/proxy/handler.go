@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ type Handler struct {
 	http                 *http.Client
 	pool                 *pool.Pool
 	selector             *pool.Coordinator
+	usage                keyUsageRefresher
 	maxBody              int64
 	researchTTL          time.Duration
 	researchPollInterval time.Duration
@@ -29,22 +31,28 @@ type Handler struct {
 
 type researchMapping struct {
 	keyName   string
+	lease     pool.Lease
 	expiresAt time.Time
+}
+
+type keyUsageRefresher interface {
+	RefreshUsage(context.Context, string) error
 }
 
 // New creates a proxy handler.
 func New(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, maxBody int64, researchTTL time.Duration) *Handler {
-	return NewWithCoordinator(clientKey, upstreamBaseURL, httpClient, keyPool, pool.NewCoordinator(keyPool, nil), maxBody, researchTTL)
+	return NewWithCoordinator(clientKey, upstreamBaseURL, httpClient, keyPool, pool.NewCoordinator(keyPool, nil), nil, maxBody, researchTTL)
 }
 
 // NewWithCoordinator creates a proxy handler with grouped request selection.
-func NewWithCoordinator(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, selector *pool.Coordinator, maxBody int64, researchTTL time.Duration) *Handler {
+func NewWithCoordinator(clientKey, upstreamBaseURL string, httpClient *http.Client, keyPool *pool.Pool, selector *pool.Coordinator, usage keyUsageRefresher, maxBody int64, researchTTL time.Duration) *Handler {
 	return &Handler{
 		clientKey:            clientKey,
 		baseURL:              strings.TrimRight(upstreamBaseURL, "/"),
 		http:                 httpClient,
 		pool:                 keyPool,
 		selector:             selector,
+		usage:                usage,
 		maxBody:              maxBody,
 		researchTTL:          researchTTL,
 		researchPollInterval: defaultResearchPollInterval,
@@ -75,6 +83,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	if r.URL.Path == "/research" {
+		h.serveResearchCreate(w, r, body)
+		return
+	}
 
 	for attempt := 0; attempt < 2; attempt++ {
 		lease, err := h.selector.Select(r.Context(), time.Now(), estimate(r.URL.Path, body))
@@ -95,30 +107,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upstream request failed", http.StatusBadGateway)
 			return
 		}
-		if response.StatusCode == http.StatusTooManyRequests && attempt == 0 && r.URL.Path != "/research" {
+		if response.StatusCode == http.StatusTooManyRequests && attempt == 0 {
 			h.pool.Resolve(lease, response.StatusCode, retryAfter(response.Header.Get("Retry-After")), time.Now())
 			response.Body.Close()
 			continue
 		}
 		h.pool.Resolve(lease, response.StatusCode, retryAfter(response.Header.Get("Retry-After")), time.Now())
 		defer response.Body.Close()
-		if r.URL.Path == "/research" && !strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
-			payload, readErr := io.ReadAll(response.Body)
-			if readErr != nil {
-				http.Error(w, "read research response", http.StatusBadGateway)
-				return
-			}
-			var result struct {
-				RequestID string `json:"request_id"`
-			}
-			if json.Unmarshal(payload, &result) == nil && result.RequestID != "" {
-				h.storeResearchMapping(result.RequestID, lease.Key.Name, time.Now())
-			}
-			copyHeader(w.Header(), response.Header)
-			w.WriteHeader(response.StatusCode)
-			_, _ = w.Write(payload)
-			return
-		}
 		copyHeader(w.Header(), response.Header)
 		w.WriteHeader(response.StatusCode)
 		_, _ = io.Copy(w, response.Body)
@@ -129,12 +124,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveResearchStatus(w http.ResponseWriter, r *http.Request) {
 	requestID := strings.TrimPrefix(r.URL.Path, "/research/")
-	keyName, ok := h.researchKey(requestID, time.Now())
+	mapping, ok := h.researchMapping(requestID, time.Now())
 	if !ok {
 		http.Error(w, "research request not found", http.StatusNotFound)
 		return
 	}
-	key, ok := h.pool.Key(keyName)
+	key, ok := h.pool.Key(mapping.keyName)
 	if !ok {
 		http.Error(w, "research key unavailable", http.StatusServiceUnavailable)
 		return
@@ -152,21 +147,36 @@ func (h *Handler) serveResearchStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		http.Error(w, "read research response", http.StatusBadGateway)
+		return
+	}
+	if status, decodeErr := decodeResearchStatus(body); decodeErr == nil {
+		if done, _ := researchTerminal(status.Status); done {
+			h.settleResearch(r.Context(), mapping.lease)
+		}
+	}
 	copyHeader(w.Header(), response.Header)
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	_, _ = w.Write(body)
 }
 
-func (h *Handler) storeResearchMapping(requestID, keyName string, now time.Time) {
+func (h *Handler) storeResearchMapping(requestID string, lease pool.Lease, now time.Time) {
 	h.researchMu.Lock()
-	defer h.researchMu.Unlock()
+	var expired []pool.Lease
 	for id, mapping := range h.research {
 		if !now.Before(mapping.expiresAt) {
 			delete(h.research, id)
+			expired = append(expired, mapping.lease)
 		}
 	}
-	mapping := researchMapping{keyName: keyName, expiresAt: now.Add(h.researchTTL)}
+	mapping := researchMapping{keyName: lease.Key.Name, lease: lease, expiresAt: now.Add(h.researchTTL)}
 	h.research[requestID] = mapping
+	h.researchMu.Unlock()
+	for _, expiredLease := range expired {
+		h.pool.SettleResearch(expiredLease)
+	}
 	time.AfterFunc(h.researchTTL, func() {
 		h.removeResearchMapping(requestID, mapping.expiresAt)
 	})
@@ -174,25 +184,31 @@ func (h *Handler) storeResearchMapping(requestID, keyName string, now time.Time)
 
 func (h *Handler) removeResearchMapping(requestID string, expiresAt time.Time) {
 	h.researchMu.Lock()
-	defer h.researchMu.Unlock()
 	mapping, ok := h.research[requestID]
 	if ok && mapping.expiresAt.Equal(expiresAt) {
 		delete(h.research, requestID)
 	}
+	h.researchMu.Unlock()
+	if ok && mapping.expiresAt.Equal(expiresAt) {
+		h.pool.SettleResearch(mapping.lease)
+	}
 }
 
-func (h *Handler) researchKey(requestID string, now time.Time) (string, bool) {
+func (h *Handler) researchMapping(requestID string, now time.Time) (researchMapping, bool) {
 	h.researchMu.Lock()
-	defer h.researchMu.Unlock()
 	mapping, ok := h.research[requestID]
 	if !ok {
-		return "", false
+		h.researchMu.Unlock()
+		return researchMapping{}, false
 	}
 	if !now.Before(mapping.expiresAt) {
 		delete(h.research, requestID)
-		return "", false
+		h.researchMu.Unlock()
+		h.pool.SettleResearch(mapping.lease)
+		return researchMapping{}, false
 	}
-	return mapping.keyName, true
+	h.researchMu.Unlock()
+	return mapping, true
 }
 
 func supportedPostPath(path string) bool {
@@ -209,15 +225,10 @@ func estimate(path string, body []byte) float64 {
 		var request struct {
 			Model string `json:"model"`
 		}
-		if json.Unmarshal(body, &request) == nil {
-			switch request.Model {
-			case "mini":
-				return 10
-			case "pro":
-				return 40
-			}
+		if json.Unmarshal(body, &request) == nil && request.Model == "mini" {
+			return 110
 		}
-		return 30
+		return 250
 	}
 	if path == "/search" && bytes.Contains(body, []byte(`"search_depth":"advanced"`)) {
 		return 2

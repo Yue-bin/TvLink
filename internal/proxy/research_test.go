@@ -117,8 +117,148 @@ func TestRunResearchHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestRunResearchRetriesQuotaErrorWithAnotherKey(t *testing.T) {
+	var authorizations []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		if len(authorizations) == 1 {
+			w.WriteHeader(432)
+			_, _ = w.Write([]byte(`{"detail":{"error":"plan limit"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"request_id":"research-1","status":"completed","content":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	handler, keyPool := newTwoKeyResearchHandler(upstream.URL, upstream.Client(), time.Hour)
+	result, err := handler.RunResearch(context.Background(), []byte(`{"input":"test","model":"mini"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(result, []byte(`"content":"ok"`)) {
+		t.Fatalf("result = %s", result)
+	}
+	if len(authorizations) != 2 || authorizations[0] == authorizations[1] {
+		t.Fatalf("authorizations = %v, want two distinct Keys", authorizations)
+	}
+	for _, snapshot := range keyPool.Snapshots(time.Now()) {
+		if snapshot.RealUsage != 0 || snapshot.State != pool.StateReady {
+			t.Fatalf("snapshot = %#v", snapshot)
+		}
+	}
+}
+
+func TestRunResearchReturnsLastQuotaErrorAfterTryingEveryKey(t *testing.T) {
+	var authorizations []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		if len(authorizations) == 1 {
+			w.WriteHeader(432)
+			_, _ = w.Write([]byte(`{"detail":{"error":"plan limit"}}`))
+			return
+		}
+		w.WriteHeader(433)
+		_, _ = w.Write([]byte(`{"detail":{"error":"paygo limit"}}`))
+	}))
+	defer upstream.Close()
+
+	handler, _ := newTwoKeyResearchHandler(upstream.URL, upstream.Client(), time.Hour)
+	_, err := handler.RunResearch(context.Background(), []byte(`{"input":"test","model":"mini"}`), nil)
+	if err == nil || !strings.Contains(err.Error(), "433") || !strings.Contains(err.Error(), "paygo limit") {
+		t.Fatalf("RunResearch() error = %v, want final 433 response", err)
+	}
+	if len(authorizations) != 2 || authorizations[0] == authorizations[1] {
+		t.Fatalf("authorizations = %v, want each Key once", authorizations)
+	}
+}
+
+func TestRunResearchReconcilesReservationAtTerminalStatus(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"request_id":"research-1","status":"completed","content":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	keyPool := pool.New([]pool.Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	keyPool.UpdateUsage("one", pool.Usage{Limit: 1000}, time.Now())
+	handler := New("tlk-client", upstream.URL, upstream.Client(), keyPool, 1024, time.Hour)
+	refresher := &fakeUsageRefresher{pool: keyPool, used: 73}
+	handler.usage = refresher
+
+	if _, err := handler.RunResearch(context.Background(), []byte(`{"input":"test","model":"mini"}`), nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := keyPool.Snapshots(time.Now())[0]
+	if snapshot.RealUsage != 73 || snapshot.EstimatedUsage != 0 || snapshot.ResearchReserved != 0 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if !reflect.DeepEqual(refresher.calls, []string{"one"}) {
+		t.Fatalf("refresh calls = %v", refresher.calls)
+	}
+}
+
+func TestRunResearchRetainsReservationWhenTerminalRefreshFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"request_id":"research-1","status":"completed","content":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	keyPool := pool.New([]pool.Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	keyPool.UpdateUsage("one", pool.Usage{Limit: 1000}, time.Now())
+	handler := New("tlk-client", upstream.URL, upstream.Client(), keyPool, 1024, time.Hour)
+	handler.usage = &fakeUsageRefresher{pool: keyPool, err: errors.New("usage unavailable")}
+
+	if _, err := handler.RunResearch(context.Background(), []byte(`{"input":"test","model":"mini"}`), nil); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := keyPool.Snapshots(time.Now())[0]
+	if snapshot.RealUsage != 0 || snapshot.EstimatedUsage != 110 {
+		t.Fatalf("snapshot = %#v, want conservative settled reservation", snapshot)
+	}
+}
+
+func TestRunResearchCancellationKeepsActiveReservation(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"request_id":"research-1","status":"pending"}`))
+	}))
+	defer upstream.Close()
+
+	keyPool := pool.New([]pool.Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	keyPool.UpdateUsage("one", pool.Usage{Limit: 1000}, time.Now())
+	handler := New("tlk-client", upstream.URL, upstream.Client(), keyPool, 1024, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := handler.RunResearch(ctx, []byte(`{"input":"test","model":"mini"}`), func(string) { cancel() })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunResearch() error = %v, want context canceled", err)
+	}
+	snapshot := keyPool.Snapshots(time.Now())[0]
+	if snapshot.EstimatedUsage != 110 || snapshot.ResearchReserved != 110 {
+		t.Fatalf("snapshot = %#v, want active reservation", snapshot)
+	}
+}
+
+type fakeUsageRefresher struct {
+	pool  *pool.Pool
+	used  int64
+	err   error
+	calls []string
+}
+
+func (f *fakeUsageRefresher) RefreshUsage(_ context.Context, name string) error {
+	f.calls = append(f.calls, name)
+	if f.err != nil {
+		return f.err
+	}
+	f.pool.UpdateUsage(name, pool.Usage{Limit: 1000, Used: f.used}, time.Now())
+	return nil
+}
+
 func newResearchTestHandler(upstreamURL string, client *http.Client) *Handler {
 	keyPool := pool.New([]pool.Key{{Name: "one", APIKey: "tvly-one"}}, 1)
-	keyPool.UpdateUsage("one", pool.Usage{Limit: 100}, time.Now())
+	keyPool.UpdateUsage("one", pool.Usage{Limit: 1000}, time.Now())
 	return New("tlk-client", upstreamURL, client, keyPool, 1024, time.Hour)
 }
