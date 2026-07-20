@@ -183,6 +183,73 @@ func TestResearchReturnsErrorOverSSE(t *testing.T) {
 	}
 }
 
+func TestResearchReturnsStructuredContent(t *testing.T) {
+	runner := fakeResearchRunner{result: []byte(`{"request_id":"research-1","created_at":"2026-07-21T00:00:00Z","status":"completed","content":"report","sources":[{"title":"source","url":"https://example.com","favicon":"https://example.com/favicon.ico"}],"response_time":1.2}`)}
+	result := callResearchResult(t, runner, 9)
+
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent = %#v, want object", result["structuredContent"])
+	}
+	if structured["request_id"] != "research-1" || structured["status"] != "completed" || structured["content"] != "report" {
+		t.Errorf("structuredContent = %#v", structured)
+	}
+	content := result["content"].([]any)[0].(map[string]any)
+	if content["text"] != "report" {
+		t.Errorf("text = %#v, want report", content["text"])
+	}
+}
+
+func TestResearchFormatsObjectContentAsText(t *testing.T) {
+	runner := fakeResearchRunner{result: []byte(`{"request_id":"research-2","created_at":"2026-07-21T00:00:00Z","status":"completed","content":{"summary":"report"},"sources":[],"response_time":1.2}`)}
+	result := callResearchResult(t, runner, 10)
+
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent = %#v, want object", result["structuredContent"])
+	}
+	structuredContent := structured["content"].(map[string]any)
+	if structuredContent["summary"] != "report" {
+		t.Errorf("structured content = %#v", structuredContent)
+	}
+	content := result["content"].([]any)[0].(map[string]any)
+	if content["text"] != `{"summary":"report"}` {
+		t.Errorf("text = %#v, want compact JSON", content["text"])
+	}
+}
+
+func callResearchResult(t *testing.T, runner fakeResearchRunner, id int) map[string]any {
+	t.Helper()
+	handler := New("tlk-client", "1.2.3", runner)
+	requestBody, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "tavily_research",
+			"arguments": map[string]any{"input": "test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer tlk-client")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	messages := decodeSSEMessages(t, response.Body.String())
+	if len(messages) != 1 {
+		t.Fatalf("SSE messages = %d, want 1: %s", len(messages), response.Body.String())
+	}
+	result, ok := messages[0]["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %#v, want object", messages[0]["result"])
+	}
+	return result
+}
+
 func decodeSSEMessages(t *testing.T, body string) []map[string]any {
 	t.Helper()
 	var messages []map[string]any

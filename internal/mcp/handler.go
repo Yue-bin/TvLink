@@ -165,15 +165,12 @@ func (h *Handler) streamResearch(w http.ResponseWriter, r *http.Request, id json
 		writeAndFlush(errorMessage(id, -32603, err.Error()))
 		return
 	}
-	text, err := researchText(completed)
+	result, err := researchResult(completed)
 	if err != nil {
 		writeAndFlush(errorMessage(id, -32603, err.Error()))
 		return
 	}
-	writeAndFlush(resultMessage(id, map[string]any{
-		"content": []map[string]string{{"type": "text", "text": text}},
-		"isError": false,
-	}))
+	writeAndFlush(resultMessage(id, result))
 }
 
 func (h *Handler) writeResult(w http.ResponseWriter, id json.RawMessage, result any) {
@@ -238,6 +235,25 @@ func researchText(body []byte) (string, error) {
 		return "", fmt.Errorf("decode completed research content")
 	}
 	return string(completed.Content), nil
+}
+
+func researchResult(body []byte) (map[string]any, error) {
+	var structured map[string]any
+	if err := json.Unmarshal(body, &structured); err != nil {
+		return nil, fmt.Errorf("decode completed research response: %w", err)
+	}
+	if structured == nil {
+		return nil, fmt.Errorf("completed research response is not an object")
+	}
+	text, err := researchText(body)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"content":           []map[string]string{{"type": "text", "text": text}},
+		"structuredContent": structured,
+		"isError":           false,
+	}, nil
 }
 
 //go:embed tavily_tools.json
