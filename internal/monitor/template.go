@@ -202,6 +202,9 @@ const pageHTML = `<!doctype html>
     .ma-head .ma-t { color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
     .ma-head .ma-v { color: var(--accent); font-size: 10px; font-weight: 700; }
     .mini-axis-card.mobile { display: none; margin: 14px 0 0; }
+    .ma-detail { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--edge); }
+    .ma-detail .ma-r { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+    .ma-detail .ma-r b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
     .ma-track { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); grid-auto-flow: column; gap: 3px; margin-top: 11px; }
     .ma-cell {
       position: relative;
@@ -365,6 +368,9 @@ const pageHTML = `<!doctype html>
         {{end}}
         <div class="ma-cursor" style="{{.Rotation.CursorLeft}}"></div>
       </div>
+      <div class="ma-detail">
+        <div class="ma-r"><span>本轮已消耗</span><b>{{.Rotation.RoundUsage}} / {{.Rotation.RoundTotal}}</b></div>
+      </div>
     </div>
     {{end}}
 
@@ -383,6 +389,9 @@ const pageHTML = `<!doctype html>
             </div>
             {{end}}
             <div class="ma-cursor" style="{{.Rotation.CursorLeft}}"></div>
+          </div>
+          <div class="ma-detail">
+            <div class="ma-r"><span>本轮已消耗</span><b>{{.Rotation.RoundUsage}} / {{.Rotation.RoundTotal}}</b></div>
           </div>
         </div>
         {{end}}
