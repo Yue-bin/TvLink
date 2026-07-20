@@ -10,9 +10,9 @@ import (
 func TestNewPageViewAggregatesUsageAndBuildsRows(t *testing.T) {
 	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.Local)
 	snapshots := []pool.Snapshot{
-		{Name: "primary-01", Limit: 500, RealUsage: 210, EstimatedUsage: 18, Remaining: 272, Weight: 272, State: pool.StateReady, RealUsageAt: now.Add(-12 * time.Second)},
-		{Name: "primary-02", Limit: 500, RealUsage: 330, EstimatedUsage: 37, Remaining: 133, Weight: 133, State: pool.StateReady, RealUsageAt: now.Add(-18 * time.Second)},
-		{Name: "backup-cn", Limit: 500, RealUsage: 200, EstimatedUsage: 0, Remaining: 300, Weight: 0, State: pool.StateCooling, RealUsageAt: now.Add(-23 * time.Second), RetryAt: now.Add(42 * time.Second)},
+		{Name: "primary-01", Limit: 500, RealUsage: 210, EstimatedUsage: 18, Remaining: 272, Weight: 0, State: pool.StateReady, RealUsageAt: now.Add(-12 * time.Second)},
+		{Name: "primary-02", Limit: 500, RealUsage: 330, EstimatedUsage: 37, Remaining: 133, Weight: 0, State: pool.StateReady, RealUsageAt: now.Add(-18 * time.Second)},
+		{Name: "backup-cn", Limit: 500, RealUsage: 200, EstimatedUsage: 0, Remaining: 300, Weight: 999, State: pool.StateCooling, RealUsageAt: now.Add(-23 * time.Second), RetryAt: now.Add(42 * time.Second)},
 	}
 
 	view := newPageView(pool.MonitorSnapshot{Keys: snapshots}, now)

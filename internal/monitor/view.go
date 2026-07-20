@@ -78,7 +78,7 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		totalActual += key.RealUsage
 		totalEstimated += key.EstimatedUsage
 		totalRemaining += key.Remaining
-		if key.Weight > 0 {
+		if key.State == pool.StateReady {
 			view.AvailableKeys++
 		}
 		metrics := newProgressView(key.RealUsage, key.EstimatedUsage, key.Limit)
