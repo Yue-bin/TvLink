@@ -40,6 +40,7 @@ func TestHandlerRendersUsageDashboard(t *testing.T) {
 		"TvLink 用量监控", "总用量", "60 (+3) / 300", "primary-01", "primary-02",
 		"usage-progress", "progress-actual", "progress-projected", "预计剩余", "Group 1",
 		"group-filter", "group-select", "function setFilter", "data-group=\"group-",
+		"本轮次", "Ready", "Key 用量",
 	} {
 		if !strings.Contains(body, text) {
 			t.Errorf("page does not contain %q", text)

@@ -71,7 +71,7 @@ type GroupSnapshot struct {
 	Active         bool
 	Spent          bool
 	KeyCount       int
-	AvailableKeys  int
+	ReadyKeys      int
 	Limit          int64
 	RealUsage      int64
 	EstimatedUsage float64
@@ -480,8 +480,8 @@ func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
 			snapshot.RealUsage += state.realUsage
 			snapshot.EstimatedUsage += state.estimated
 			snapshot.Remaining += state.remaining()
-			if weights[name] > 0 {
-				snapshot.AvailableKeys++
+			if state.state == StateReady {
+				snapshot.ReadyKeys++
 			}
 		}
 		groups = append(groups, snapshot)

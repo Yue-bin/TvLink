@@ -214,6 +214,9 @@ func TestMonitorSnapshotAggregatesGroupsAndSelectionWeights(t *testing.T) {
 		if group.KeyCount != 2 || group.RoundLimit != 10 {
 			t.Errorf("group %d = %+v", group.Index, group)
 		}
+		if group.ReadyKeys != group.KeyCount {
+			t.Errorf("group %d ready keys = %d, want %d", group.Index, group.ReadyKeys, group.KeyCount)
+		}
 		totalLimit += group.Limit
 		totalUsage += group.RealUsage
 		totalEstimated += group.EstimatedUsage

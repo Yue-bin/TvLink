@@ -78,8 +78,8 @@ func TestNewPageViewBuildsGroupFilters(t *testing.T) {
 			{Name: "two", Group: 2, Limit: 200, RealUsage: 80, EstimatedUsage: 5, Remaining: 115, Weight: 100, State: pool.StateReady},
 		},
 		Groups: []pool.GroupSnapshot{
-			{Index: 1, Spent: true, KeyCount: 1, Limit: 100, RealUsage: 20, EstimatedUsage: 3, Remaining: 77, RoundUsage: 600, RoundLimit: 600},
-			{Index: 2, Active: true, KeyCount: 1, AvailableKeys: 1, Limit: 200, RealUsage: 80, EstimatedUsage: 5, Remaining: 115, RoundUsage: 384, RoundLimit: 600},
+			{Index: 1, Spent: true, KeyCount: 1, ReadyKeys: 1, Limit: 100, RealUsage: 20, EstimatedUsage: 3, Remaining: 77, RoundUsage: 600, RoundLimit: 600},
+			{Index: 2, Active: true, KeyCount: 1, ReadyKeys: 1, Limit: 200, RealUsage: 80, EstimatedUsage: 5, Remaining: 115, RoundUsage: 384, RoundLimit: 600},
 		},
 	}
 
@@ -90,10 +90,13 @@ func TestNewPageViewBuildsGroupFilters(t *testing.T) {
 	if view.Groups[0].ID != "group-1" || view.Groups[0].State != "本轮完成" {
 		t.Errorf("first group = %+v", view.Groups[0])
 	}
-	if view.Groups[0].Metrics.UsageText != "20 (+3) / 100" || view.Groups[0].Metrics.ProjectedWidth != "width:23.00%" {
-		t.Errorf("first group progress = %+v", view.Groups[0].Metrics)
+	if view.Groups[0].RoundMetrics.UsageText != "600 / 600" || view.Groups[0].RoundMetrics.ActualWidth != "width:100.00%" {
+		t.Errorf("first group round progress = %+v", view.Groups[0].RoundMetrics)
 	}
-	if view.Groups[1].RoundUsage != "384 / 600" || view.Groups[1].AvailableKeys != 1 {
+	if view.Groups[0].QuotaUsage != "20 (+3) / 100" || view.Groups[0].ReadyKeys != 1 || view.Groups[0].Remaining != "77" {
+		t.Errorf("first group metadata = %+v", view.Groups[0])
+	}
+	if view.Groups[1].RoundMetrics.UsageText != "384 / 600" || view.Groups[1].ReadyKeys != 1 {
 		t.Errorf("active group = %+v", view.Groups[1])
 	}
 	if view.Rows[0].GroupID != "group-1" || view.Rows[1].GroupName != "Group 2" {

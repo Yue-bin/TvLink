@@ -304,7 +304,7 @@ const pageHTML = `<!doctype html>
         <span>可用 Key <strong>{{.AvailableKeys}} / {{.TotalKeys}}</strong></span>
         {{if .GroupingEnabled}}{{range .Groups}}{{if .Active}}
         <span>当前组 <strong>{{.Name}}</strong></span>
-        <span>本轮组用量 <strong>{{.RoundUsage}}</strong></span>
+        <span>本轮组用量 <strong>{{.RoundMetrics.UsageText}}</strong></span>
         {{end}}{{end}}{{end}}
       </div>
     </section>
@@ -331,12 +331,11 @@ const pageHTML = `<!doctype html>
           {{range .Groups}}
           <button class="group-option {{.StateClass}}" type="button" data-filter="{{.ID}}" data-title="{{.Name}}" data-description="{{.State}}，包含 {{.KeyCount}} 个 Key" onclick="setFilter('{{.ID}}')">
             <div class="group-top"><span class="group-name">{{.Name}}</span><span class="group-state">{{.State}}</span></div>
-            <div class="group-usage">{{.Metrics.UsageText}}</div>
-            <div class="usage-progress compact{{if .Metrics.Unavailable}} unavailable{{end}}" role="img" aria-label="{{.Metrics.AriaLabel}}">
-              <div class="progress-projected" style="{{.Metrics.ProjectedWidth}}"></div>
-              <div class="progress-actual" style="{{.Metrics.ActualWidth}}"></div>
+            <div class="group-usage">本轮次 {{.RoundMetrics.UsageText}}</div>
+            <div class="usage-progress compact{{if .RoundMetrics.Unavailable}} unavailable{{end}}" role="img" aria-label="{{.RoundMetrics.AriaLabel}}">
+              <div class="progress-actual" style="{{.RoundMetrics.ActualWidth}}"></div>
             </div>
-            <div class="group-meta"><span>{{.KeyCount}} Key{{if .Active}} · {{.AvailableKeys}} 可用{{end}}</span><span>本轮次 {{.RoundUsage}}</span></div>
+            <div class="group-meta"><span>Ready {{.ReadyKeys}} / {{.KeyCount}}</span><span>Key 用量 {{.QuotaUsage}}</span><span>预计剩余 {{.Remaining}}</span></div>
           </button>
           {{end}}
         </nav>

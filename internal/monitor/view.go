@@ -36,16 +36,16 @@ type keyView struct {
 }
 
 type groupView struct {
-	ID            string
-	Name          string
-	State         string
-	StateClass    string
-	Active        bool
-	Metrics       progressView
-	KeyCount      int
-	AvailableKeys int
-	Remaining     string
-	RoundUsage    string
+	ID           string
+	Name         string
+	State        string
+	StateClass   string
+	Active       bool
+	RoundMetrics progressView
+	QuotaUsage   string
+	KeyCount     int
+	ReadyKeys    int
+	Remaining    string
 }
 
 type pageView struct {
@@ -115,16 +115,16 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		}
 		name := fmt.Sprintf("Group %d", group.Index)
 		view.Groups = append(view.Groups, groupView{
-			ID:            fmt.Sprintf("group-%d", group.Index),
-			Name:          name,
-			State:         state,
-			StateClass:    stateClass,
-			Active:        group.Active,
-			Metrics:       newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit),
-			KeyCount:      group.KeyCount,
-			AvailableKeys: group.AvailableKeys,
-			Remaining:     formatFloat(group.Remaining),
-			RoundUsage:    fmt.Sprintf("%s / %s", formatFloat(group.RoundUsage), formatFloat(group.RoundLimit)),
+			ID:           fmt.Sprintf("group-%d", group.Index),
+			Name:         name,
+			State:        state,
+			StateClass:   stateClass,
+			Active:       group.Active,
+			RoundMetrics: newRoundProgressView(group.RoundUsage, group.RoundLimit),
+			QuotaUsage:   newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit).UsageText,
+			KeyCount:     group.KeyCount,
+			ReadyKeys:    group.ReadyKeys,
+			Remaining:    formatFloat(group.Remaining),
 		})
 		if group.Active {
 			view.ActiveGroupName = name
@@ -150,10 +150,25 @@ func newProgressView(actual int64, estimated float64, limit int64) progressView 
 }
 
 func percentage(value float64, limit int64) float64 {
+	return percentageOf(value, float64(limit))
+}
+
+func newRoundProgressView(usage, limit float64) progressView {
+	percent := percentageOf(usage, limit)
+	return progressView{
+		UsageText:         fmt.Sprintf("%s / %s", formatFloat(usage), formatFloat(limit)),
+		ActualWidth:       template.CSS(fmt.Sprintf("width:%.2f%%", percent)),
+		ActualPercentText: formatPercent(percent),
+		AriaLabel:         fmt.Sprintf("本轮次已使用 %s，限额 %s", formatFloat(usage), formatFloat(limit)),
+		Unavailable:       limit <= 0,
+	}
+}
+
+func percentageOf(value, limit float64) float64 {
 	if limit <= 0 {
 		return 0
 	}
-	return min(100, max(0, value/float64(limit)*100))
+	return min(100, max(0, value/limit*100))
 }
 
 func formatPercent(value float64) string {
