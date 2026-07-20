@@ -349,11 +349,8 @@ const pageHTML = `<!doctype html>
       <div class="summary-meta">
         <span><i class="legend-mark legend-actual"></i>实际 <strong>{{.Total.ActualPercentText}}</strong></span>
         <span><i class="legend-mark legend-projected"></i>预计 <strong>{{.Total.ProjectedPercentText}}</strong></span>
-        <span>预计剩余 <strong>{{.ProjectedRemaining}}</strong></span>
         <span>可用 Key <strong>{{.AvailableKeys}} / {{.TotalKeys}}</strong></span>
         {{if .GroupingEnabled}}{{range .Groups}}{{if .Active}}
-        <span>当前组 <strong>{{.Name}}</strong></span>
-        <span>组内额度 <strong>{{.RoundMetrics.UsageText}}</strong></span>
         {{end}}{{end}}{{end}}
       </div>
     </section>
@@ -374,7 +371,7 @@ const pageHTML = `<!doctype html>
         <div class="panel-title"><span>显示范围</span><span>{{len .Groups}} 组</span></div>
         {{if .HasActiveGroup}}
         <div class="mini-axis-card">
-          <div class="ma-head"><span class="ma-t">本轮轮换</span><span class="ma-v">{{.Rotation.ActiveName}}{{if .Rotation.ActivePercent}} · 组内 {{.Rotation.ActivePercent}}{{end}}</span></div>
+          <div class="ma-head"><span class="ma-t">本轮轮换</span><span class="ma-v">{{.Rotation.ActiveName}}</span></div>
           <div class="ma-track">
             {{range .Groups}}
             <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
@@ -390,9 +387,8 @@ const pageHTML = `<!doctype html>
         </div>
         {{end}}
         <nav class="group-filter" aria-label="Key 分组筛选">
-          <button class="group-option all-option active" type="button" data-filter="all" data-title="所有 Key" data-description="按名称展示全部脱敏 Key" onclick="setFilter('all')">
-            <div class="group-top"><span class="group-name">所有 Key</span><span class="group-state">{{.TotalKeys}}</span></div>
-            <div class="group-meta"><span>预计剩余 {{.ProjectedRemaining}}</span><span>可用 {{.AvailableKeys}}</span></div>
+          <button class="group-option all-option active" type="button" data-filter="all" data-title="所有 Key" onclick="setFilter('all')">
+            <div class="group-top"><span class="group-name">所有 Key</span></div>
           </button>
           {{range .Groups}}
           <button class="group-option {{.StateClass}}" type="button" data-filter="{{.ID}}" data-title="{{.Name}}" data-description="{{.State}}，包含 {{.KeyCount}} 个 Key" onclick="setFilter('{{.ID}}')">
