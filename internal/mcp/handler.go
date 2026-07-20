@@ -2,15 +2,14 @@
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 )
 
 type request struct {
@@ -47,7 +46,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON-RPC request", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	switch payload.Method {
 	case "initialize":
 		h.writeResult(w, payload.ID, map[string]any{
@@ -112,69 +110,134 @@ func (h *Handler) callTool(w http.ResponseWriter, r *http.Request, payload reque
 	h.writeResult(w, payload.ID, result)
 }
 
-type researchStreamer interface {
-	StreamResearch(context.Context, []byte) (*http.Response, error)
+type researchRunner interface {
+	RunResearch(context.Context, []byte, func(string)) ([]byte, error)
 }
 
 func (h *Handler) streamResearch(w http.ResponseWriter, r *http.Request, id json.RawMessage, arguments json.RawMessage, progressToken any) {
-	streamer, ok := h.proxy.(researchStreamer)
+	runner, ok := h.proxy.(researchRunner)
 	if !ok {
-		h.writeError(w, id, -32603, "research streaming is unavailable")
+		h.writeError(w, id, -32603, "research polling is unavailable")
 		return
 	}
-	response, err := streamer.StreamResearch(r.Context(), arguments)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.writeError(w, id, -32603, "research progress streaming is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	writeAndFlush := func(message any) bool {
+		if err := writeSSEMessage(w, message); err != nil {
+			cancel()
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	token, reportsProgress := validProgressToken(progressToken)
+	progress := 0
+	var streamErr error
+	report := func(status string) {
+		if !reportsProgress || streamErr != nil {
+			return
+		}
+		progress++
+		if !writeAndFlush(map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "notifications/progress",
+			"params": map[string]any{
+				"progressToken": token,
+				"progress":      progress,
+				"message":       status,
+			},
+		}) {
+			streamErr = ctx.Err()
+		}
+	}
+	completed, err := runner.RunResearch(ctx, arguments, report)
+	if streamErr != nil {
+		return
+	}
 	if err != nil {
-		h.writeError(w, id, -32603, err.Error())
+		writeAndFlush(errorMessage(id, -32603, err.Error()))
 		return
 	}
-	defer response.Body.Close()
-	var content strings.Builder
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 64<<10), 4<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		var event struct {
-			Choices []struct {
-				Delta struct {
-					Content   json.RawMessage `json:"content"`
-					Sources   any             `json:"sources"`
-					ToolCalls any             `json:"tool_calls"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-		if json.Unmarshal([]byte(data), &event) != nil || len(event.Choices) == 0 {
-			continue
-		}
-		delta := event.Choices[0].Delta
-		if len(delta.Content) > 0 {
-			var text string
-			if json.Unmarshal(delta.Content, &text) == nil {
-				content.WriteString(text)
-			} else {
-				content.Write(delta.Content)
-			}
-		}
-		_ = delta.Sources
-		_ = delta.ToolCalls
-		_ = progressToken
-	}
-	if err := scanner.Err(); err != nil {
-		h.writeError(w, id, -32603, fmt.Sprintf("read research stream: %v", err))
+	text, err := researchText(completed)
+	if err != nil {
+		writeAndFlush(errorMessage(id, -32603, err.Error()))
 		return
 	}
-	h.writeResult(w, id, map[string]any{"content": []map[string]string{{"type": "text", "text": content.String()}}})
+	writeAndFlush(resultMessage(id, map[string]any{
+		"content": []map[string]string{{"type": "text", "text": text}},
+		"isError": false,
+	}))
 }
 
 func (h *Handler) writeResult(w http.ResponseWriter, id json.RawMessage, result any) {
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "result": result})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resultMessage(id, result)); err != nil {
+		return
+	}
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "error": map[string]any{"code": code, "message": message}})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(errorMessage(id, code, message)); err != nil {
+		return
+	}
+}
+
+func resultMessage(id json.RawMessage, result any) map[string]any {
+	return map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "result": result}
+}
+
+func errorMessage(id json.RawMessage, code int, message string) map[string]any {
+	return map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "error": map[string]any{"code": code, "message": message}}
+}
+
+func writeSSEMessage(w http.ResponseWriter, message any) error {
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("encode SSE message: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+		return fmt.Errorf("write SSE message: %w", err)
+	}
+	return nil
+}
+
+func validProgressToken(value any) (any, bool) {
+	switch token := value.(type) {
+	case string:
+		return token, true
+	case float64:
+		return token, !math.IsInf(token, 0) && !math.IsNaN(token) && math.Trunc(token) == token
+	default:
+		return nil, false
+	}
+}
+
+func researchText(body []byte) (string, error) {
+	var completed struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(body, &completed); err != nil {
+		return "", fmt.Errorf("decode completed research response: %w", err)
+	}
+	if len(completed.Content) == 0 {
+		return "", fmt.Errorf("completed research response missing content")
+	}
+	var text string
+	if err := json.Unmarshal(completed.Content, &text); err == nil {
+		return text, nil
+	}
+	if !json.Valid(completed.Content) {
+		return "", fmt.Errorf("decode completed research content")
+	}
+	return string(completed.Content), nil
 }
 
 //go:embed tavily_tools.json
