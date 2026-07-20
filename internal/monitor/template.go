@@ -183,7 +183,6 @@ const pageHTML = `<!doctype html>
       font-size: 9px;
       font-variant-numeric: tabular-nums;
     }
-    .group-option.active .group-usage { color: var(--text); }
     .group-meta {
       justify-content: space-between;
       gap: 8px;
@@ -192,7 +191,6 @@ const pageHTML = `<!doctype html>
     }
     .all-option { padding: 13px 10px; }
     .all-option .group-name { font-size: 13px; }
-    .all-option .group-meta { justify-content: flex-start; gap: 14px; }
     .mini-axis-card {
       padding: 13px 14px 12px;
       margin-bottom: 14px;
@@ -203,6 +201,7 @@ const pageHTML = `<!doctype html>
     .ma-head { display: flex; justify-content: space-between; align-items: baseline; }
     .ma-head .ma-t { color: var(--muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
     .ma-head .ma-v { color: var(--accent); font-size: 10px; font-weight: 700; }
+    .mini-axis-card.mobile { display: none; margin: 14px 0 0; }
     .ma-track { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); grid-auto-flow: column; gap: 3px; margin-top: 11px; }
     .ma-cell {
       position: relative;
@@ -230,16 +229,6 @@ const pageHTML = `<!doctype html>
       border: 3px solid transparent;
       border-top-color: var(--accent);
     }
-    .ma-detail {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-      margin-top: 11px;
-      padding-top: 10px;
-      border-top: 1px solid var(--edge);
-    }
-    .ma-detail .ma-r { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
-    .ma-detail .ma-r b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
     .mobile-filter { display: none; margin-top: 18px; }
     .mobile-filter label {
       display: block;
@@ -324,6 +313,7 @@ const pageHTML = `<!doctype html>
       .summary-meta, .row-meta { column-gap: 12px; }
       .workspace.grouped { display: block; margin-top: 14px; }
       .group-panel { display: none; }
+      .mini-axis-card.mobile { display: block; }
       .mobile-filter { display: block; }
       .filter-summary { text-align: left; }
       .key-panel { margin-top: 16px; }
@@ -350,8 +340,6 @@ const pageHTML = `<!doctype html>
         <span><i class="legend-mark legend-actual"></i>实际 <strong>{{.Total.ActualPercentText}}</strong></span>
         <span><i class="legend-mark legend-projected"></i>预计 <strong>{{.Total.ProjectedPercentText}}</strong></span>
         <span>可用 Key <strong>{{.AvailableKeys}} / {{.TotalKeys}}</strong></span>
-        {{if .GroupingEnabled}}{{range .Groups}}{{if .Active}}
-        {{end}}{{end}}{{end}}
       </div>
     </section>
 
@@ -362,6 +350,21 @@ const pageHTML = `<!doctype html>
         <option value="all">所有 Key</option>
         {{range .Groups}}<option value="{{.ID}}">{{.Name}}{{if .Active}} · 当前活动{{end}}</option>{{end}}
       </select>
+    </div>
+    {{end}}
+
+    {{if .HasActiveGroup}}
+    <div class="mini-axis-card mobile">
+      <div class="ma-head"><span class="ma-t">本轮轮换</span><span class="ma-v">{{.Rotation.ActiveName}}</span></div>
+      <div class="ma-track">
+        {{range .Groups}}
+        <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
+          {{if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
+          <span>{{if .Spent}}✓{{else}}{{.ShortName}}{{end}}</span>
+        </div>
+        {{end}}
+        <div class="ma-cursor" style="{{.Rotation.CursorLeft}}"></div>
+      </div>
     </div>
     {{end}}
 
@@ -381,13 +384,10 @@ const pageHTML = `<!doctype html>
             {{end}}
             <div class="ma-cursor" style="{{.Rotation.CursorLeft}}"></div>
           </div>
-          <div class="ma-detail">
-            <div class="ma-r"><span>本轮已消耗</span><b>{{.Rotation.RoundUsage}} / {{.Rotation.RoundTotal}}</b></div>
-          </div>
         </div>
         {{end}}
         <nav class="group-filter" aria-label="Key 分组筛选">
-          <button class="group-option all-option active" type="button" data-filter="all" data-title="所有 Key" onclick="setFilter('all')">
+          <button class="group-option all-option active" type="button" data-filter="all" data-title="所有 Key" data-description="按名称展示全部脱敏 Key" onclick="setFilter('all')">
             <div class="group-top"><span class="group-name">所有 Key</span></div>
           </button>
           {{range .Groups}}

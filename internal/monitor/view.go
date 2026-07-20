@@ -51,11 +51,10 @@ type groupView struct {
 }
 
 type rotationView struct {
-	CursorLeft    template.CSS
-	RoundUsage    string
-	RoundTotal    string
-	ActiveName    string
-	ActivePercent string
+	CursorLeft template.CSS
+	RoundUsage string
+	RoundTotal string
+	ActiveName string
 }
 
 type pageView struct {
@@ -146,7 +145,6 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		if group.Active {
 			view.ActiveGroupName = name
 			view.Rotation.ActiveName = name
-			view.Rotation.ActivePercent = formatPercent(percentageOf(group.RoundUsage, group.RoundLimit))
 		}
 	}
 	if view.GroupingEnabled && roundTotal > 0 {
