@@ -158,6 +158,24 @@ func TestEstimateUsesResearchModelDefaults(t *testing.T) {
 	}
 }
 
+func TestResearchModelForLoggingUsesWhitelist(t *testing.T) {
+	tests := []struct {
+		body string
+		want string
+	}{
+		{body: `{"model":"mini"}`, want: "mini"},
+		{body: `{"model":"pro"}`, want: "pro"},
+		{body: `{"model":"auto"}`, want: "auto"},
+		{body: `{"model":"private-input"}`, want: "auto"},
+		{body: `{`, want: "auto"},
+	}
+	for _, test := range tests {
+		if got := researchModel([]byte(test.body)); got != test.want {
+			t.Errorf("researchModel(%q) = %q, want %q", test.body, got, test.want)
+		}
+	}
+}
+
 func TestRESTResearchRetriesQuotaErrorWithAnotherKey(t *testing.T) {
 	var authorizations []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -110,6 +110,7 @@ func (h *Handler) RunResearch(ctx context.Context, body []byte, progress func(st
 }
 
 func (h *Handler) admitResearch(ctx context.Context, payload []byte, headers http.Header) (researchAdmission, error) {
+	model := researchModel(payload)
 	selection := pool.Selection{
 		Estimate: estimate("/research", payload),
 		Workload: pool.WorkloadResearch,
@@ -139,7 +140,7 @@ func (h *Handler) admitResearch(ctx context.Context, payload []byte, headers htt
 		}
 		lastQuota = readUpstreamResponseError(response)
 		h.pool.Resolve(lease, response.StatusCode, 0, time.Now())
-		slog.Warn("research quota rejected", "key", lease.Key.Name, "status", response.StatusCode, "reservation", lease.Estimate, "attempt", attempt)
+		slog.Warn("research quota rejected", "key", lease.Key.Name, "status", response.StatusCode, "model", model, "reservation", lease.Estimate, "attempt", attempt)
 	}
 }
 
@@ -189,6 +190,7 @@ func (h *Handler) serveResearchCreate(w http.ResponseWriter, r *http.Request, pa
 
 func (h *Handler) settleResearch(ctx context.Context, lease pool.Lease) {
 	h.pool.SettleResearch(lease)
+	slog.Info("research reservation reconciliation started", "key", lease.Key.Name, "reservation", lease.Estimate)
 	if h.usage == nil {
 		return
 	}
@@ -200,7 +202,21 @@ func (h *Handler) settleResearch(ctx context.Context, lease pool.Lease) {
 func (h *Handler) deferResearchSettlement(lease pool.Lease) {
 	time.AfterFunc(h.researchTTL, func() {
 		h.pool.SettleResearch(lease)
+		slog.Info("research reservation safety ttl elapsed", "key", lease.Key.Name, "reservation", lease.Estimate)
 	})
+}
+
+func researchModel(payload []byte) string {
+	var request struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(payload, &request) == nil {
+		switch request.Model {
+		case "mini", "pro", "auto":
+			return request.Model
+		}
+	}
+	return "auto"
 }
 
 func readUpstreamResponseError(response *http.Response) *upstreamResponseError {

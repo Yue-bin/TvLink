@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -174,8 +175,10 @@ func (h *Handler) storeResearchMapping(requestID string, lease pool.Lease, now t
 	mapping := researchMapping{keyName: lease.Key.Name, lease: lease, expiresAt: now.Add(h.researchTTL)}
 	h.research[requestID] = mapping
 	h.researchMu.Unlock()
+	slog.Info("research reservation promoted", "key", lease.Key.Name, "request_id", requestID, "reservation", lease.Estimate)
 	for _, expiredLease := range expired {
 		h.pool.SettleResearch(expiredLease)
+		slog.Info("research reservation expired", "key", expiredLease.Key.Name, "reservation", expiredLease.Estimate)
 	}
 	time.AfterFunc(h.researchTTL, func() {
 		h.removeResearchMapping(requestID, mapping.expiresAt)
@@ -191,6 +194,7 @@ func (h *Handler) removeResearchMapping(requestID string, expiresAt time.Time) {
 	h.researchMu.Unlock()
 	if ok && mapping.expiresAt.Equal(expiresAt) {
 		h.pool.SettleResearch(mapping.lease)
+		slog.Info("research reservation expired", "key", mapping.lease.Key.Name, "request_id", requestID, "reservation", mapping.lease.Estimate)
 	}
 }
 
