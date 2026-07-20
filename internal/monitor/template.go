@@ -231,9 +231,9 @@ const pageHTML = `<!doctype html>
       border-top-color: var(--accent);
     }
     .ma-detail {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 5px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
       margin-top: 11px;
       padding-top: 10px;
       border-top: 1px solid var(--edge);
@@ -353,7 +353,7 @@ const pageHTML = `<!doctype html>
         <span>可用 Key <strong>{{.AvailableKeys}} / {{.TotalKeys}}</strong></span>
         {{if .GroupingEnabled}}{{range .Groups}}{{if .Active}}
         <span>当前组 <strong>{{.Name}}</strong></span>
-        <span>本轮组用量 <strong>{{.RoundMetrics.UsageText}}</strong></span>
+        <span>组内额度 <strong>{{.RoundMetrics.UsageText}}</strong></span>
         {{end}}{{end}}{{end}}
       </div>
     </section>
@@ -374,7 +374,7 @@ const pageHTML = `<!doctype html>
         <div class="panel-title"><span>显示范围</span><span>{{len .Groups}} 组</span></div>
         {{if .HasActiveGroup}}
         <div class="mini-axis-card">
-          <div class="ma-head"><span class="ma-t">轮换进度</span><span class="ma-v">{{.Rotation.ActiveName}} · {{.Rotation.ActivePercent}}</span></div>
+          <div class="ma-head"><span class="ma-t">本轮轮换</span><span class="ma-v">{{.Rotation.ActiveName}}{{if .Rotation.ActivePercent}} · 组内 {{.Rotation.ActivePercent}}{{end}}</span></div>
           <div class="ma-track">
             {{range .Groups}}
             <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
@@ -385,10 +385,8 @@ const pageHTML = `<!doctype html>
             <div class="ma-cursor" style="{{.Rotation.CursorLeft}}"></div>
           </div>
           <div class="ma-detail">
-            <div class="ma-r"><span>本轮</span><b>{{.Rotation.RoundUsage}}</b></div>
-            <div class="ma-r"><span>剩余</span><b>{{.Rotation.RoundLeft}} 次</b></div>
-            <div class="ma-r"><span>组 Key 用量</span><b>{{.Rotation.GroupUsage}}</b></div>
-            <div class="ma-r"><span>Ready</span><b>{{.Rotation.ReadyText}}</b></div>
+            <div class="ma-r"><span>本轮已消耗</span><b>{{.Rotation.RoundUsage}} / {{.Rotation.RoundTotal}}</b></div>
+            <div class="ma-r"><span>本轮剩余</span><b>{{.Rotation.RoundLeft}}</b></div>
           </div>
         </div>
         {{end}}
@@ -400,7 +398,7 @@ const pageHTML = `<!doctype html>
           {{range .Groups}}
           <button class="group-option {{.StateClass}}" type="button" data-filter="{{.ID}}" data-title="{{.Name}}" data-description="{{.State}}，包含 {{.KeyCount}} 个 Key" onclick="setFilter('{{.ID}}')">
             <div class="group-top"><span class="group-name">{{.Name}}</span><span class="group-state">{{.State}}</span></div>
-            <div class="group-usage">本轮次 {{.RoundMetrics.UsageText}}</div>
+            <div class="group-usage">组内额度 {{.RoundMetrics.UsageText}}</div>
             <div class="usage-progress compact{{if .RoundMetrics.Unavailable}} unavailable{{end}}" role="img" aria-label="{{.RoundMetrics.AriaLabel}}">
               <div class="progress-actual" style="{{.RoundMetrics.ActualWidth}}"></div>
             </div>

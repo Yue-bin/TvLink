@@ -52,12 +52,11 @@ type groupView struct {
 
 type rotationView struct {
 	CursorLeft    template.CSS
+	RoundUsage    string
+	RoundTotal    string
+	RoundLeft     string
 	ActiveName    string
 	ActivePercent string
-	RoundUsage    string
-	RoundLeft     string
-	GroupUsage    string
-	ReadyText     string
 }
 
 type pageView struct {
@@ -119,6 +118,7 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 			ShowRetry:  key.State == pool.StateCooling,
 		})
 	}
+	var roundUsed, roundTotal float64
 	for _, group := range snapshot.Groups {
 		state, stateClass := "等待", "group-waiting"
 		if group.Spent {
@@ -142,21 +142,22 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 			ReadyKeys:    group.ReadyKeys,
 			Remaining:    formatFloat(group.Remaining),
 		})
+		roundUsed += group.RoundUsage
+		roundTotal += group.RoundLimit
 		if group.Active {
 			view.ActiveGroupName = name
-			view.HasActiveGroup = true
-			roundPercent := percentageOf(group.RoundUsage, group.RoundLimit)
-			groupWidth := 100 / float64(len(snapshot.Groups))
-			cursor := (float64(group.Index-1) + roundPercent/100) * groupWidth
-			view.Rotation = rotationView{
-				CursorLeft:    template.CSS(fmt.Sprintf("left:%.2f%%", cursor)),
-				ActiveName:    name,
-				ActivePercent: formatPercent(roundPercent),
-				RoundUsage:    fmt.Sprintf("%s / %s", formatFloat(group.RoundUsage), formatFloat(group.RoundLimit)),
-				RoundLeft:     formatFloat(max(0, group.RoundLimit-group.RoundUsage)),
-				GroupUsage:    newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit).UsageText,
-				ReadyText:     fmt.Sprintf("%d / %d", group.ReadyKeys, group.KeyCount),
-			}
+			view.Rotation.ActiveName = name
+			view.Rotation.ActivePercent = formatPercent(percentageOf(group.RoundUsage, group.RoundLimit))
+		}
+	}
+	if view.GroupingEnabled && roundTotal > 0 {
+		view.HasActiveGroup = true
+		view.Rotation.CursorLeft = template.CSS(fmt.Sprintf("left:%.2f%%", percentageOf(roundUsed, roundTotal)))
+		view.Rotation.RoundUsage = formatFloat(roundUsed)
+		view.Rotation.RoundTotal = formatFloat(roundTotal)
+		view.Rotation.RoundLeft = formatFloat(max(0, roundTotal-roundUsed))
+		if view.Rotation.ActiveName == "" {
+			view.Rotation.ActiveName = "本轮已轮转完毕"
 		}
 	}
 	view.Total = newProgressView(totalActual, totalEstimated, totalLimit)
