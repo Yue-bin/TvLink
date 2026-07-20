@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,21 +39,131 @@ func TestSelectReservesEstimatedCredits(t *testing.T) {
 	}
 }
 
-func TestExhaustionStatusDisablesKey(t *testing.T) {
+func TestUsageExhaustionDisablesKey(t *testing.T) {
 	now := time.Now()
 	p := New([]Key{{Name: "one", APIKey: "tvly-one"}}, 1)
-	p.UpdateUsage("one", Usage{Limit: 10, Used: 2}, now)
-	lease, err := p.Select(now, 1)
-	if err != nil {
-		t.Fatalf("Select() error = %v", err)
-	}
-
-	p.Resolve(lease, 432, 0, now)
+	p.UpdateUsage("one", Usage{Limit: 10, Used: 10}, now)
 	if _, err := p.Select(now, 1); !errors.Is(err, ErrNoEligibleKey) {
-		t.Fatalf("Select() after 432 error = %v, want ErrNoEligibleKey", err)
+		t.Fatalf("Select() after exhausted usage error = %v, want ErrNoEligibleKey", err)
 	}
 	if got := p.Snapshots(now)[0].State; got != StateExhausted {
 		t.Errorf("State = %q, want %q", got, StateExhausted)
+	}
+}
+
+func TestSelectForRequiresFullReservation(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 900}, now)
+
+	_, err := p.SelectFor(now, Selection{Estimate: 110, Workload: WorkloadResearch})
+	if !errors.Is(err, ErrNoEligibleKey) {
+		t.Fatalf("SelectFor() error = %v, want ErrNoEligibleKey", err)
+	}
+}
+
+func TestUsageRefreshPreservesActiveResearchReservation(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 500}, now)
+	research, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Select(now, 10); err != nil {
+		t.Fatal(err)
+	}
+
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 520}, now.Add(time.Minute))
+	snapshot := p.Snapshots(now.Add(time.Minute))[0]
+	if snapshot.EstimatedUsage != 250 || snapshot.ResearchReserved != 250 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+
+	p.SettleResearch(research)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 570}, now.Add(2*time.Minute))
+	snapshot = p.Snapshots(now.Add(2 * time.Minute))[0]
+	if snapshot.EstimatedUsage != 0 || snapshot.ResearchReserved != 0 {
+		t.Fatalf("settled snapshot = %#v", snapshot)
+	}
+}
+
+func TestResearchQuotaRejectionDoesNotExhaustKey(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 603}, now)
+	lease, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p.Resolve(lease, 432, 0, now)
+	snapshot := p.Snapshots(now)[0]
+	if snapshot.RealUsage != 603 || snapshot.State != StateReady || !snapshot.ResearchBlocked {
+		t.Fatalf("snapshot after 432 = %#v", snapshot)
+	}
+	if _, err := p.Select(now, 1); err != nil {
+		t.Fatalf("ordinary Select() = %v", err)
+	}
+	if _, err := p.SelectFor(now, Selection{Estimate: 110, Workload: WorkloadResearch}); !errors.Is(err, ErrNoEligibleKey) {
+		t.Fatalf("Research SelectFor() = %v", err)
+	}
+}
+
+func TestResearchPauseClearsWhenHeadroomIncreases(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 500}, now)
+	active, err := p.SelectFor(now, Selection{Estimate: 110, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(rejected, 432, 0, now)
+	p.SettleResearch(active)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 550}, now.Add(time.Minute))
+
+	if _, err := p.SelectFor(now.Add(time.Minute), Selection{Estimate: 110, Workload: WorkloadResearch}); err != nil {
+		t.Fatalf("SelectFor() after increased headroom = %v", err)
+	}
+}
+
+func TestConcurrentResearchAdmissionDoesNotOversubscribe(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	p.UpdateUsage("one", Usage{Limit: 1000, Used: 500}, now)
+
+	start := make(chan struct{})
+	results := make(chan error, 8)
+	var wait sync.WaitGroup
+	for range 8 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			_, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+			results <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+
+	succeeded := 0
+	for err := range results {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if !errors.Is(err, ErrNoEligibleKey) {
+			t.Fatalf("unexpected selection error: %v", err)
+		}
+	}
+	if succeeded != 2 {
+		t.Fatalf("successful reservations = %d, want 2", succeeded)
 	}
 }
 
@@ -149,6 +260,41 @@ func TestSelectUsesActiveGroupAndRollsBackRateLimit(t *testing.T) {
 	p.Resolve(lease, 429, time.Minute, now)
 	if got := p.groups[p.activeGroup].reserved; got != 0 {
 		t.Errorf("group reserved after 429 = %v, want 0", got)
+	}
+}
+
+func TestResearchReservationsKeepGroupRoundAccountingMonotonic(t *testing.T) {
+	now := time.Now()
+	keys := []Key{{Name: "one", APIKey: "tvly-one"}, {Name: "two", APIKey: "tvly-two"}}
+	p := New(keys, 1)
+	for _, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 1000, Used: 0}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 2, UsageLimit: 600, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	rejected, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(rejected, 432, 0, now)
+	if got := p.groups[p.activeGroup].reserved; got != 0 {
+		t.Fatalf("group reserved after 432 = %v, want 0", got)
+	}
+
+	accepted, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(accepted, 201, 0, now)
+	p.SettleResearch(accepted)
+	p.UpdateUsage(accepted.Key.Name, Usage{Limit: 1000, Used: 100}, now.Add(time.Minute))
+	if got := p.groups[p.activeGroup].reserved; got != 250 {
+		t.Fatalf("group reserved after settlement = %v, want 250", got)
 	}
 }
 

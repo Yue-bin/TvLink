@@ -33,3 +33,39 @@ func TestCoordinatorRebuildsSpentGroups(t *testing.T) {
 		t.Errorf("refreshes = %d, want 1", got)
 	}
 }
+
+func TestCoordinatorPreservesResearchExclusionsAcrossRebuild(t *testing.T) {
+	now := time.Now()
+	keys := []Key{{Name: "one", APIKey: "tvly-one"}, {Name: "two", APIKey: "tvly-two"}}
+	p := New(keys, 1)
+	for _, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 1000, Used: 0}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 1, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Select(now, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	coordinator := NewCoordinator(p, func(context.Context) error {
+		for _, key := range keys {
+			p.UpdateUsage(key.Name, Usage{Limit: 1000, Used: 1}, now)
+		}
+		return nil
+	})
+	lease, err := coordinator.SelectFor(context.Background(), now, Selection{
+		Estimate: 110,
+		Workload: WorkloadResearch,
+		Excluded: map[string]struct{}{"one": {}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Key.Name != "two" {
+		t.Fatalf("selected Key = %q, want two", lease.Key.Name)
+	}
+}

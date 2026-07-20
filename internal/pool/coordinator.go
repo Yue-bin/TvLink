@@ -24,13 +24,18 @@ func NewCoordinator(keyPool *Pool, refresh UsageRefresher) *Coordinator {
 
 // Select reserves a key, rebuilding groups once when required.
 func (c *Coordinator) Select(ctx context.Context, now time.Time, estimate float64) (Lease, error) {
-	lease, err := c.pool.Select(now, estimate)
+	return c.SelectFor(ctx, now, Selection{Estimate: estimate})
+}
+
+// SelectFor reserves a Key with endpoint-specific selection constraints.
+func (c *Coordinator) SelectFor(ctx context.Context, now time.Time, selection Selection) (Lease, error) {
+	lease, err := c.pool.SelectFor(now, selection)
 	if !errors.Is(err, ErrGroupRebuildRequired) {
 		return lease, err
 	}
 	c.rebuildMu.Lock()
 	defer c.rebuildMu.Unlock()
-	lease, err = c.pool.Select(now, estimate)
+	lease, err = c.pool.SelectFor(now, selection)
 	if !errors.Is(err, ErrGroupRebuildRequired) {
 		return lease, err
 	}
@@ -40,5 +45,5 @@ func (c *Coordinator) Select(ctx context.Context, now time.Time, estimate float6
 	if err := c.pool.RebuildGroups(now); err != nil {
 		return Lease{}, ErrNoEligibleKey
 	}
-	return c.pool.Select(now, estimate)
+	return c.pool.SelectFor(now, selection)
 }

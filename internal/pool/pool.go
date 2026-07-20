@@ -44,25 +44,46 @@ type Usage struct {
 	Used  int64
 }
 
-// Lease identifies the key reserved for one upstream request.
+// Workload describes endpoint-specific allocation behavior.
+type Workload uint8
+
+const (
+	// WorkloadDefault uses normal Key eligibility.
+	WorkloadDefault Workload = iota
+	// WorkloadResearch preserves its reservation across usage refreshes.
+	WorkloadResearch
+)
+
+// Selection describes one requested reservation.
+type Selection struct {
+	Estimate float64
+	Workload Workload
+	Excluded map[string]struct{}
+}
+
+// Lease identifies the Key reservation for one upstream request.
 type Lease struct {
+	ID       uint64
 	Key      Key
 	Estimate float64
+	Workload Workload
 	group    int
 }
 
 // Snapshot is the redacted state exposed to the monitor.
 type Snapshot struct {
-	Name           string
-	Group          int
-	Limit          int64
-	RealUsage      int64
-	RealUsageAt    time.Time
-	EstimatedUsage float64
-	Remaining      float64
-	Weight         float64
-	State          State
-	RetryAt        time.Time
+	Name             string
+	Group            int
+	Limit            int64
+	RealUsage        int64
+	RealUsageAt      time.Time
+	EstimatedUsage   float64
+	Remaining        float64
+	Weight           float64
+	State            State
+	RetryAt          time.Time
+	ResearchReserved float64
+	ResearchBlocked  bool
 }
 
 // GroupSnapshot is the redacted aggregate state of one configured key group.
@@ -96,14 +117,21 @@ type GroupConfig struct {
 }
 
 type keyState struct {
-	key       Key
-	limit     int64
-	realUsage int64
-	realAt    time.Time
-	estimated float64
-	ready     bool
-	state     State
-	retryAt   time.Time
+	key               Key
+	limit             int64
+	realUsage         int64
+	realAt            time.Time
+	estimated         float64
+	ready             bool
+	state             State
+	retryAt           time.Time
+	researchBlockedAt *float64
+}
+
+type reservation struct {
+	lease      Lease
+	persistent bool
+	settled    bool
 }
 
 type groupState struct {
@@ -121,6 +149,8 @@ type Pool struct {
 	groups        []groupState
 	activeGroup   int
 	rotationMonth month
+	reservations  map[uint64]*reservation
+	nextLeaseID   uint64
 }
 
 type month struct {
@@ -135,9 +165,10 @@ func New(keys []Key, seed int64) *Pool {
 		states[key.Name] = &keyState{key: key, state: StatePending}
 	}
 	return &Pool{
-		keys:        states,
-		random:      rand.New(rand.NewSource(seed)),
-		activeGroup: -1,
+		keys:         states,
+		random:       rand.New(rand.NewSource(seed)),
+		activeGroup:  -1,
+		reservations: make(map[uint64]*reservation),
 	}
 }
 
@@ -321,8 +352,16 @@ func (p *Pool) UpdateUsage(name string, usage Usage, fetchedAt time.Time) {
 	state.limit = usage.Limit
 	state.realUsage = usage.Used
 	state.realAt = fetchedAt
-	state.estimated = 0
 	state.ready = true
+	for id, reservation := range p.reservations {
+		if reservation.lease.Key.Name != name {
+			continue
+		}
+		if reservation.persistent && !reservation.settled {
+			continue
+		}
+		p.removeReservation(id, false)
+	}
 	if usage.Limit <= usage.Used {
 		state.state = StateExhausted
 		return
@@ -344,8 +383,13 @@ func (p *Pool) Key(name string) (Key, bool) {
 	return state.key, true
 }
 
-// Select picks a key by weight and reserves the estimated upstream credit cost.
+// Select picks a Key for a normal workload.
 func (p *Pool) Select(now time.Time, estimate float64) (Lease, error) {
+	return p.SelectFor(now, Selection{Estimate: estimate})
+}
+
+// SelectFor picks a Key that can hold the requested reservation.
+func (p *Pool) SelectFor(now time.Time, selection Selection) (Lease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.groupConfig != (GroupConfig{}) && len(p.groups) > 0 && monthOf(now, p.groupConfig.Location) != p.rotationMonth {
@@ -353,9 +397,9 @@ func (p *Pool) Select(now time.Time, estimate float64) (Lease, error) {
 	}
 
 	groupIndex := -1
-	candidates := p.candidates(now)
+	candidates := p.candidates(now, selection)
 	if p.groupConfig != (GroupConfig{}) && len(p.groups) > 0 {
-		groupIndex, candidates = p.groupCandidates(now, estimate)
+		groupIndex, candidates = p.groupCandidates(now, selection)
 		if len(candidates) == 0 && p.allGroupsSpent() {
 			return Lease{}, ErrGroupRebuildRequired
 		}
@@ -378,14 +422,26 @@ func (p *Pool) Select(now time.Time, estimate float64) (Lease, error) {
 		}
 	}
 
-	chosen.state.estimated += estimate
+	p.nextLeaseID++
+	lease := Lease{
+		ID:       p.nextLeaseID,
+		Key:      chosen.state.key,
+		Estimate: selection.Estimate,
+		Workload: selection.Workload,
+		group:    groupIndex,
+	}
+	p.reservations[lease.ID] = &reservation{
+		lease:      lease,
+		persistent: selection.Workload == WorkloadResearch,
+	}
+	chosen.state.estimated += selection.Estimate
 	if groupIndex >= 0 {
-		p.groups[groupIndex].reserved += estimate
+		p.groups[groupIndex].reserved += selection.Estimate
 	}
 	if chosen.state.state == StateCooling {
 		chosen.state.state = StateProbing
 	}
-	return Lease{Key: chosen.state.key, Estimate: estimate, group: groupIndex}, nil
+	return lease, nil
 }
 
 // Resolve records an upstream HTTP result for a previously selected key.
@@ -399,26 +455,39 @@ func (p *Pool) Resolve(lease Lease, statusCode int, retryAfter time.Duration, no
 	}
 	switch statusCode {
 	case 429:
-		p.rollbackEstimate(state, lease)
+		p.removeReservation(lease.ID, true)
 		if retryAfter <= 0 {
 			retryAfter = time.Minute
 		}
 		state.retryAt = now.Add(retryAfter)
 		state.state = StateCooling
 	case 432, 433:
-		state.estimated = 0
-		p.rollbackGroupEstimate(lease)
-		state.realUsage = state.limit
-		state.state = StateExhausted
+		p.removeReservation(lease.ID, true)
+		if lease.Workload == WorkloadResearch {
+			remaining := state.remaining()
+			state.researchBlockedAt = &remaining
+		}
 	case 200, 201:
 		if state.state == StateProbing {
 			state.state = StateReady
 		}
 	default:
 		if statusCode >= 400 && statusCode < 500 {
-			p.rollbackEstimate(state, lease)
+			p.removeReservation(lease.ID, true)
 		}
 	}
+}
+
+// SettleResearch marks a persistent reservation for removal by the next usage refresh.
+func (p *Pool) SettleResearch(lease Lease) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	reservation, ok := p.reservations[lease.ID]
+	if !ok || reservation.lease.Workload != WorkloadResearch {
+		return
+	}
+	reservation.settled = true
 }
 
 // Snapshots returns monitor-safe copies of all key states.
@@ -430,15 +499,17 @@ func (p *Pool) Snapshots(now time.Time) []Snapshot {
 	for _, state := range p.keys {
 		remaining := state.remaining()
 		snapshots = append(snapshots, Snapshot{
-			Name:           state.key.Name,
-			Limit:          state.limit,
-			RealUsage:      state.realUsage,
-			RealUsageAt:    state.realAt,
-			EstimatedUsage: state.estimated,
-			Remaining:      remaining,
-			Weight:         p.weight(state, now),
-			State:          state.state,
-			RetryAt:        state.retryAt,
+			Name:             state.key.Name,
+			Limit:            state.limit,
+			RealUsage:        state.realUsage,
+			RealUsageAt:      state.realAt,
+			EstimatedUsage:   state.estimated,
+			Remaining:        remaining,
+			Weight:           p.weight(state, now),
+			State:            state.state,
+			RetryAt:          state.retryAt,
+			ResearchReserved: p.researchReserved(state.key.Name),
+			ResearchBlocked:  p.researchBlocked(state),
 		})
 	}
 	sort.Slice(snapshots, func(i, j int) bool {
@@ -455,9 +526,9 @@ func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
 	groupingEnabled := p.groupConfig != (GroupConfig{})
 	membership := make(map[string]int, len(p.keys))
 	weights := make(map[string]float64, len(p.keys))
-	candidates := p.candidates(now)
+	candidates := p.candidates(now, Selection{})
 	if groupingEnabled && p.activeGroup >= 0 && p.activeGroup < len(p.groups) {
-		candidates = p.candidatesFor(now, p.groups[p.activeGroup].keys)
+		candidates = p.candidatesFor(now, p.groups[p.activeGroup].keys, Selection{})
 	}
 	for _, candidate := range candidates {
 		weights[candidate.state.key.Name] = candidate.weight
@@ -490,16 +561,18 @@ func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
 	keys := make([]Snapshot, 0, len(p.keys))
 	for name, state := range p.keys {
 		keys = append(keys, Snapshot{
-			Name:           state.key.Name,
-			Group:          membership[name],
-			Limit:          state.limit,
-			RealUsage:      state.realUsage,
-			RealUsageAt:    state.realAt,
-			EstimatedUsage: state.estimated,
-			Remaining:      state.remaining(),
-			Weight:         weights[name],
-			State:          state.state,
-			RetryAt:        state.retryAt,
+			Name:             state.key.Name,
+			Group:            membership[name],
+			Limit:            state.limit,
+			RealUsage:        state.realUsage,
+			RealUsageAt:      state.realAt,
+			EstimatedUsage:   state.estimated,
+			Remaining:        state.remaining(),
+			Weight:           weights[name],
+			State:            state.state,
+			RetryAt:          state.retryAt,
+			ResearchReserved: p.researchReserved(name),
+			ResearchBlocked:  p.researchBlocked(state),
 		})
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].Name < keys[j].Name })
@@ -520,11 +593,11 @@ type candidate struct {
 	weight float64
 }
 
-func (p *Pool) candidates(now time.Time) []candidate {
-	return p.candidatesFor(now, nil)
+func (p *Pool) candidates(now time.Time, selection Selection) []candidate {
+	return p.candidatesFor(now, nil, selection)
 }
 
-func (p *Pool) candidatesFor(now time.Time, allowed map[string]struct{}) []candidate {
+func (p *Pool) candidatesFor(now time.Time, allowed map[string]struct{}, selection Selection) []candidate {
 	states := make([]*keyState, 0, len(p.keys))
 	averageFraction := 0.0
 	for name, state := range p.keys {
@@ -533,7 +606,10 @@ func (p *Pool) candidatesFor(now time.Time, allowed map[string]struct{}) []candi
 				continue
 			}
 		}
-		if !p.eligible(state, now) {
+		if _, excluded := selection.Excluded[name]; excluded {
+			continue
+		}
+		if !p.eligible(state, now, selection) {
 			continue
 		}
 		states = append(states, state)
@@ -553,14 +629,14 @@ func (p *Pool) candidatesFor(now time.Time, allowed map[string]struct{}) []candi
 	return candidates
 }
 
-func (p *Pool) groupCandidates(now time.Time, estimate float64) (int, []candidate) {
+func (p *Pool) groupCandidates(now time.Time, selection Selection) (int, []candidate) {
 	for offset := 0; offset < len(p.groups); offset++ {
 		index := (p.activeGroup + offset) % len(p.groups)
 		group := &p.groups[index]
-		if group.reserved > 0 && group.reserved+estimate > p.groupConfig.UsageLimit {
+		if group.reserved > 0 && group.reserved+selection.Estimate > p.groupConfig.UsageLimit {
 			continue
 		}
-		candidates := p.candidatesFor(now, group.keys)
+		candidates := p.candidatesFor(now, group.keys, selection)
 		if len(candidates) == 0 {
 			continue
 		}
@@ -587,26 +663,27 @@ func monthOf(now time.Time, location *time.Location) month {
 	return month{year: local.Year(), month: local.Month()}
 }
 
-func (p *Pool) rollbackEstimate(state *keyState, lease Lease) {
-	state.estimated = max(0, state.estimated-lease.Estimate)
-	p.rollbackGroupEstimate(lease)
-}
-
 func (p *Pool) rollbackGroupEstimate(lease Lease) {
 	if lease.group >= 0 && lease.group < len(p.groups) {
 		p.groups[lease.group].reserved = max(0, p.groups[lease.group].reserved-lease.Estimate)
 	}
 }
 
-func (p *Pool) eligible(state *keyState, now time.Time) bool {
+func (p *Pool) eligible(state *keyState, now time.Time, selection Selection) bool {
 	if !state.ready || state.limit <= 0 || state.remaining() <= 0 || state.state == StateExhausted || state.state == StateProbing {
+		return false
+	}
+	if state.remaining() < selection.Estimate {
+		return false
+	}
+	if selection.Workload == WorkloadResearch && p.researchBlocked(state) {
 		return false
 	}
 	return state.state != StateCooling || !now.Before(state.retryAt)
 }
 
 func (p *Pool) weight(state *keyState, now time.Time) float64 {
-	if !p.eligible(state, now) {
+	if !p.eligible(state, now, Selection{}) {
 		return 0
 	}
 	return state.remaining()
@@ -614,4 +691,38 @@ func (p *Pool) weight(state *keyState, now time.Time) float64 {
 
 func (s *keyState) remaining() float64 {
 	return max(0, float64(s.limit-s.realUsage)-s.estimated)
+}
+
+func (p *Pool) removeReservation(id uint64, rollbackGroup bool) {
+	reservation, ok := p.reservations[id]
+	if !ok {
+		return
+	}
+	state := p.keys[reservation.lease.Key.Name]
+	state.estimated = max(0, state.estimated-reservation.lease.Estimate)
+	if rollbackGroup {
+		p.rollbackGroupEstimate(reservation.lease)
+	}
+	delete(p.reservations, id)
+}
+
+func (p *Pool) researchReserved(name string) float64 {
+	total := 0.0
+	for _, reservation := range p.reservations {
+		if reservation.lease.Key.Name == name && reservation.persistent && !reservation.settled {
+			total += reservation.lease.Estimate
+		}
+	}
+	return total
+}
+
+func (p *Pool) researchBlocked(state *keyState) bool {
+	if state.researchBlockedAt == nil {
+		return false
+	}
+	if state.remaining() > *state.researchBlockedAt {
+		state.researchBlockedAt = nil
+		return false
+	}
+	return true
 }
