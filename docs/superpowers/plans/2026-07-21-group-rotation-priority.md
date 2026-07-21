@@ -42,6 +42,6 @@ Run: `go test ./...`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run: `git add internal/pool/pool.go internal/pool/pool_test.go && git commit -m "fix(pool): 优先轮换高余量分组"`
