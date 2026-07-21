@@ -5,7 +5,7 @@ research_mapping_ttl = "24h"
 request_body_limit = "32MiB"
 # Optional Key-group rotation. The usage limit is estimated Tavily credits.
 # key_group_size = 3
-# group_usage_limit = 600
+# group_usage_limit = 1000
 # group_rotation_timezone = "Asia/Shanghai"
 
 [[tavily_keys]]
