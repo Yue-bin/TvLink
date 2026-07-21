@@ -219,6 +219,7 @@ const pageHTML = `<!doctype html>
     .ma-cell span { position: relative; z-index: 1; color: var(--muted); font-size: 8px; font-weight: 700; }
     .ma-cell.done { background: rgba(119, 210, 173, .1); border-color: rgba(119, 210, 173, .3); }
     .ma-cell.done span { color: var(--ready); }
+    .ma-cell.done .ma-fill { position: absolute; inset: 0; background: rgba(119, 210, 173, .22); }
     .ma-cell.now { border-color: var(--accent); }
     .ma-cell.now .ma-fill { position: absolute; top: 0; bottom: 0; left: 0; background: rgba(112, 201, 243, .18); }
     .ma-cell.now span { color: var(--accent); }
@@ -367,7 +368,7 @@ const pageHTML = `<!doctype html>
       <div class="ma-track">
         {{range .Groups}}
         <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
-          {{if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
+          {{if .Spent}}<div class="ma-fill" style="width:100%"></div>{{else if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
           <span>{{if .Spent}}✓{{else}}{{.ShortName}}{{end}}</span>
         </div>
         {{end}}
@@ -389,7 +390,7 @@ const pageHTML = `<!doctype html>
           <div class="ma-track">
             {{range .Groups}}
             <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
-              {{if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
+              {{if .Spent}}<div class="ma-fill" style="width:100%"></div>{{else if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
               <span>{{if .Spent}}✓{{else}}{{.ShortName}}{{end}}</span>
             </div>
             {{end}}
