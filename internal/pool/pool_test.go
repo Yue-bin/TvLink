@@ -460,17 +460,68 @@ func TestRebuildGroupsOrdersRotationByRemainingCapacity(t *testing.T) {
 	}
 }
 
-func TestOrderGroupsForRotationBreaksEqualCapacityByMemberName(t *testing.T) {
-	groups := []groupState{
-		{remaining: 100, keys: map[string]struct{}{"zulu": {}}},
-		{remaining: 100, keys: map[string]struct{}{"alpha": {}}},
+func TestGroupRotationNameLessUsesMemberName(t *testing.T) {
+	alpha := groupState{keys: map[string]struct{}{"alpha": {}}}
+	zulu := groupState{keys: map[string]struct{}{"zulu": {}}}
+
+	if !groupRotationNameLess(alpha, zulu) {
+		t.Errorf("groupRotationNameLess(%v, %v) = false, want true", groupRotationNames(alpha), groupRotationNames(zulu))
+	}
+}
+
+func TestRebuildGroupsUsesMonthlyHashForEqualCapacity(t *testing.T) {
+	january := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	february := january.AddDate(0, 1, 0)
+	names := []string{"one", "two", "three", "four", "five", "six", "seven", "eight"}
+
+	januaryOrder := rebuildEqualCapacityGroupOrder(t, names, january)
+	if sameJanuaryOrder := rebuildEqualCapacityGroupOrder(t, names, january); !reflect.DeepEqual(januaryOrder, sameJanuaryOrder) {
+		t.Fatalf("same-month orders differ: first %v, second %v", januaryOrder, sameJanuaryOrder)
+	}
+	if februaryOrder := rebuildEqualCapacityGroupOrder(t, names, february); reflect.DeepEqual(januaryOrder, februaryOrder) {
+		t.Fatalf("monthly orders are identical: %v", januaryOrder)
 	}
 
-	orderGroupsForRotation(groups)
-
-	if _, ok := groups[0].keys["alpha"]; !ok {
-		t.Errorf("first group = %v, want alpha group", groupRotationNames(groups[0]))
+	p := newEqualCapacityGroupPool(t, names, january)
+	if err := p.RebuildGroups(january); err != nil {
+		t.Fatal(err)
 	}
+	p.activeGroup = 3
+	if err := p.RebuildGroups(february); err != nil {
+		t.Fatal(err)
+	}
+	if p.activeGroup != 0 {
+		t.Errorf("active group after month boundary = %d, want 0", p.activeGroup)
+	}
+}
+
+func rebuildEqualCapacityGroupOrder(t *testing.T, names []string, now time.Time) []string {
+	t.Helper()
+	p := newEqualCapacityGroupPool(t, names, now)
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+	order := make([]string, len(p.groups))
+	for index, group := range p.groups {
+		order[index] = groupRotationNames(group)[0]
+	}
+	return order
+}
+
+func newEqualCapacityGroupPool(t *testing.T, names []string, now time.Time) *Pool {
+	t.Helper()
+	keys := make([]Key, 0, len(names))
+	for _, name := range names {
+		keys = append(keys, Key{Name: name})
+	}
+	p := New(keys, 1)
+	for _, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 100, Used: 0}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 10, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func groupRemaining(groups []groupState) []float64 {

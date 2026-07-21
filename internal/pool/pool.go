@@ -2,6 +2,8 @@
 package pool
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -206,6 +208,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	if p.groupConfig == (GroupConfig{}) {
 		return nil
 	}
+	rotationMonth := monthOf(now, p.groupConfig.Location)
 	keys := make([]*keyState, 0, len(p.keys))
 	for _, state := range p.keys {
 		if !state.ready || state.state == StateExhausted || state.remaining() <= 0 {
@@ -222,7 +225,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	if len(keys) == 0 {
 		p.groups = nil
 		p.activeGroup = -1
-		p.rotationMonth = monthOf(now, p.groupConfig.Location)
+		p.rotationMonth = rotationMonth
 		return nil
 	}
 
@@ -237,13 +240,13 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 		}
 	}
 	p.groups = optimalGroups(keys, capacities)
-	orderGroupsForRotation(p.groups)
-	if p.activeGroup < 0 {
+	orderGroupsForRotation(p.groups, rotationMonth)
+	if p.activeGroup < 0 || rotationMonth != p.rotationMonth {
 		p.activeGroup = 0
 	} else {
 		p.activeGroup = (p.activeGroup + 1) % len(p.groups)
 	}
-	p.rotationMonth = monthOf(now, p.groupConfig.Location)
+	p.rotationMonth = rotationMonth
 	return nil
 }
 
@@ -275,13 +278,27 @@ func optimalGroups(keys []*keyState, capacities []int) []groupState {
 	return groups
 }
 
-func orderGroupsForRotation(groups []groupState) {
+func orderGroupsForRotation(groups []groupState, rotationMonth month) {
 	sort.SliceStable(groups, func(i, j int) bool {
 		if groups[i].remaining != groups[j].remaining {
 			return groups[i].remaining > groups[j].remaining
 		}
+		leftHash := groupRotationMonthHash(rotationMonth, groups[i])
+		rightHash := groupRotationMonthHash(rotationMonth, groups[j])
+		if comparison := bytes.Compare(leftHash[:], rightHash[:]); comparison != 0 {
+			return comparison < 0
+		}
 		return groupRotationNameLess(groups[i], groups[j])
 	})
+}
+
+func groupRotationMonthHash(rotationMonth month, group groupState) [sha256.Size]byte {
+	payload := fmt.Appendf(nil, "%d:%d", rotationMonth.year, rotationMonth.month)
+	for _, name := range groupRotationNames(group) {
+		payload = fmt.Appendf(payload, ":%d:", len(name))
+		payload = append(payload, name...)
+	}
+	return sha256.Sum256(payload)
 }
 
 func groupRotationNameLess(left, right groupState) bool {
