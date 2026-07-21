@@ -215,18 +215,21 @@ func TestRebuildGroupsBalancesRemainingCapacity(t *testing.T) {
 	if len(p.groups) != 4 {
 		t.Fatalf("len(groups) = %d, want 4", len(p.groups))
 	}
-	wantCounts := []int{3, 3, 2, 2}
+	wantCounts := []int{2, 2, 3, 3}
 	seen := make(map[string]bool)
-	for index, group := range p.groups {
-		if len(group.keys) != wantCounts[index] {
-			t.Errorf("group %d size = %d, want %d", index, len(group.keys), wantCounts[index])
-		}
+	gotCounts := make([]int, 0, len(p.groups))
+	for _, group := range p.groups {
+		gotCounts = append(gotCounts, len(group.keys))
 		for name := range group.keys {
 			if seen[name] {
 				t.Errorf("key %q belongs to more than one group", name)
 			}
 			seen[name] = true
 		}
+	}
+	slices.Sort(gotCounts)
+	if !reflect.DeepEqual(gotCounts, wantCounts) {
+		t.Errorf("group sizes = %v, want %v", gotCounts, wantCounts)
 	}
 	if len(seen) != len(keys) {
 		t.Errorf("assigned keys = %d, want %d", len(seen), len(keys))
@@ -406,8 +409,10 @@ func TestRebuildGroupsMinimizesCapacitySpread(t *testing.T) {
 		t.Fatalf("RebuildGroups() error = %v", err)
 	}
 
-	if got := []int{len(p.groups[0].keys), len(p.groups[1].keys), len(p.groups[2].keys), len(p.groups[3].keys)}; !reflect.DeepEqual(got, []int{3, 3, 2, 2}) {
-		t.Fatalf("group sizes = %v, want [3 3 2 2]", got)
+	gotSizes := []int{len(p.groups[0].keys), len(p.groups[1].keys), len(p.groups[2].keys), len(p.groups[3].keys)}
+	slices.Sort(gotSizes)
+	if !reflect.DeepEqual(gotSizes, []int{2, 2, 3, 3}) {
+		t.Fatalf("group sizes = %v, want [2 2 3 3]", gotSizes)
 	}
 	totals := make([]float64, len(p.groups))
 	for index, group := range p.groups {
@@ -419,4 +424,59 @@ func TestRebuildGroupsMinimizesCapacitySpread(t *testing.T) {
 	if spread != 344 {
 		t.Errorf("group totals = %v, spread = %v, want 344", totals, spread)
 	}
+}
+
+func TestRebuildGroupsOrdersRotationByRemainingCapacity(t *testing.T) {
+	now := time.Now()
+	keys := []Key{
+		{Name: "lemon-01"}, {Name: "lemon-02"}, {Name: "lemon-03"}, {Name: "lemon-04"},
+		{Name: "moncak-01"}, {Name: "moncak-02"}, {Name: "moncak-03"}, {Name: "moncak-04"},
+		{Name: "moncak-05"}, {Name: "moncak-06"},
+	}
+	remaining := []int64{99, 960, 992, 1000, 473, 442, 543, 994, 994, 994}
+	p := New(keys, 1)
+	for index, key := range keys {
+		p.UpdateUsage(key.Name, Usage{Limit: 1000, Used: 1000 - remaining[index]}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 3, UsageLimit: 600, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	for index := 1; index < len(p.groups); index++ {
+		if p.groups[index-1].remaining < p.groups[index].remaining {
+			t.Fatalf("group totals = %v, want descending rotation order", groupRemaining(p.groups))
+		}
+	}
+
+	lease, err := p.Select(now, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.groups[0].keys[lease.Key.Name]; !ok {
+		t.Errorf("first selected key %q is not in highest-capacity group", lease.Key.Name)
+	}
+}
+
+func TestOrderGroupsForRotationBreaksEqualCapacityByMemberName(t *testing.T) {
+	groups := []groupState{
+		{remaining: 100, keys: map[string]struct{}{"zulu": {}}},
+		{remaining: 100, keys: map[string]struct{}{"alpha": {}}},
+	}
+
+	orderGroupsForRotation(groups)
+
+	if _, ok := groups[0].keys["alpha"]; !ok {
+		t.Errorf("first group = %v, want alpha group", groupRotationNames(groups[0]))
+	}
+}
+
+func groupRemaining(groups []groupState) []float64 {
+	remaining := make([]float64, len(groups))
+	for index, group := range groups {
+		remaining[index] = group.remaining
+	}
+	return remaining
 }

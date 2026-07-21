@@ -237,6 +237,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 		}
 	}
 	p.groups = optimalGroups(keys, capacities)
+	orderGroupsForRotation(p.groups)
 	if p.activeGroup < 0 {
 		p.activeGroup = 0
 	} else {
@@ -272,6 +273,35 @@ func optimalGroups(keys []*keyState, capacities []int) []groupState {
 		}
 	}
 	return groups
+}
+
+func orderGroupsForRotation(groups []groupState) {
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].remaining != groups[j].remaining {
+			return groups[i].remaining > groups[j].remaining
+		}
+		return groupRotationNameLess(groups[i], groups[j])
+	})
+}
+
+func groupRotationNameLess(left, right groupState) bool {
+	leftNames := groupRotationNames(left)
+	rightNames := groupRotationNames(right)
+	for index := range min(len(leftNames), len(rightNames)) {
+		if leftNames[index] != rightNames[index] {
+			return leftNames[index] < rightNames[index]
+		}
+	}
+	return len(leftNames) < len(rightNames)
+}
+
+func groupRotationNames(group groupState) []string {
+	names := make([]string, 0, len(group.keys))
+	for name := range group.keys {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func searchPartition(keys []*keyState, capacities []int, buckets []partitionBucket, keyIndex int, best *[]partitionBucket, bestScore *partitionScore) {
