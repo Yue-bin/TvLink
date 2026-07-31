@@ -93,6 +93,7 @@ type GroupSnapshot struct {
 	Index          int
 	Active         bool
 	Spent          bool
+	Deferred       bool
 	KeyCount       int
 	ReadyKeys      int
 	Limit          int64
@@ -140,6 +141,8 @@ type groupState struct {
 	keys      map[string]struct{}
 	remaining float64
 	reserved  float64
+	closed    bool
+	deferred  bool
 }
 
 // Pool synchronizes key allocation, reservations, and circuit state.
@@ -447,7 +450,7 @@ func (p *Pool) SelectFor(now time.Time, selection Selection) (Lease, error) {
 	candidates := p.candidates(now, selection)
 	if p.groupConfig != (GroupConfig{}) && len(p.groups) > 0 {
 		groupIndex, candidates = p.groupCandidates(now, selection)
-		if len(candidates) == 0 && p.allGroupsSpent() {
+		if len(candidates) == 0 && p.allGroupsTerminal() {
 			return Lease{}, ErrGroupRebuildRequired
 		}
 	}
@@ -586,7 +589,8 @@ func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
 		snapshot := GroupSnapshot{
 			Index:      index + 1,
 			Active:     index == p.activeGroup,
-			Spent:      group.reserved >= p.groupConfig.UsageLimit,
+			Spent:      group.closed || group.reserved >= p.groupConfig.UsageLimit,
+			Deferred:   group.deferred,
 			KeyCount:   len(group.keys),
 			RoundUsage: group.reserved,
 			RoundLimit: p.groupConfig.UsageLimit,
@@ -680,11 +684,18 @@ func (p *Pool) groupCandidates(now time.Time, selection Selection) (int, []candi
 	for offset := 0; offset < len(p.groups); offset++ {
 		index := (p.activeGroup + offset) % len(p.groups)
 		group := &p.groups[index]
+		if p.groupTerminal(group) {
+			continue
+		}
 		if group.reserved > 0 && group.reserved+selection.Estimate > p.groupConfig.UsageLimit {
+			group.closed = true
 			continue
 		}
 		candidates := p.candidatesFor(now, group.keys, selection)
 		if len(candidates) == 0 {
+			if p.groupCooling(group, now) {
+				group.deferred = true
+			}
 			continue
 		}
 		p.activeGroup = index
@@ -693,16 +704,36 @@ func (p *Pool) groupCandidates(now time.Time, selection Selection) (int, []candi
 	return -1, nil
 }
 
-func (p *Pool) allGroupsSpent() bool {
+func (p *Pool) allGroupsTerminal() bool {
 	if len(p.groups) == 0 {
 		return false
 	}
 	for _, group := range p.groups {
-		if group.reserved < p.groupConfig.UsageLimit {
+		if !p.groupTerminal(&group) {
 			return false
 		}
 	}
 	return true
+}
+
+func (p *Pool) groupTerminal(group *groupState) bool {
+	return group.closed || group.deferred || group.reserved >= p.groupConfig.UsageLimit
+}
+
+func (p *Pool) groupCooling(group *groupState, now time.Time) bool {
+	cooling := false
+	for name := range group.keys {
+		state := p.keys[name]
+		if !state.ready || state.limit <= 0 || state.remaining() <= 0 || state.state == StateExhausted {
+			continue
+		}
+		if state.state == StateProbing || state.state == StateCooling && now.Before(state.retryAt) {
+			cooling = true
+			continue
+		}
+		return false
+	}
+	return cooling
 }
 
 func monthOf(now time.Time, location *time.Location) month {

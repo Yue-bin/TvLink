@@ -109,3 +109,21 @@ func TestNewPageViewBuildsGroupFilters(t *testing.T) {
 		t.Errorf("GeneratedAt = %q", view.GeneratedAt)
 	}
 }
+
+func TestNewPageViewShowsGroupTerminalStates(t *testing.T) {
+	view := newPageView(pool.MonitorSnapshot{
+		GroupingEnabled: true,
+		ActiveGroup:     1,
+		Groups: []pool.GroupSnapshot{
+			{Index: 1, Active: true, Spent: true, KeyCount: 1, RoundLimit: 600, RoundUsage: 600},
+			{Index: 2, Deferred: true, KeyCount: 1, RoundLimit: 600, RoundUsage: 250},
+		},
+	}, time.Now())
+
+	if got := view.Groups[0]; got.State != "本轮完成" || got.StateClass != "group-spent" {
+		t.Errorf("spent active group = %+v, want completed state", got)
+	}
+	if got := view.Groups[1]; got.State != "本轮延后" || got.StateClass != "group-deferred" {
+		t.Errorf("deferred group = %+v, want deferred state", got)
+	}
+}

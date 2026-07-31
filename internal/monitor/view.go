@@ -46,6 +46,7 @@ type groupView struct {
 	StateClass   string
 	Active       bool
 	Spent        bool
+	Deferred     bool
 	RoundMetrics progressView
 	QuotaUsage   string
 	KeyCount     int
@@ -125,10 +126,12 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 	var roundUsed, roundTotal float64
 	for _, group := range snapshot.Groups {
 		state, stateClass := "等待", "group-waiting"
-		if group.Spent {
+		switch {
+		case group.Spent:
 			state, stateClass = "本轮完成", "group-spent"
-		}
-		if group.Active {
+		case group.Deferred:
+			state, stateClass = "本轮延后", "group-deferred"
+		case group.Active:
 			state, stateClass = "当前活动", "group-active"
 		}
 		name := fmt.Sprintf("Group %d", group.Index)
@@ -140,6 +143,7 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 			StateClass:   stateClass,
 			Active:       group.Active,
 			Spent:        group.Spent,
+			Deferred:     group.Deferred,
 			RoundMetrics: newRoundProgressView(group.RoundUsage, group.RoundLimit),
 			QuotaUsage:   newProgressView(group.RealUsage, group.EstimatedUsage, group.Limit).UsageText,
 			KeyCount:     group.KeyCount,

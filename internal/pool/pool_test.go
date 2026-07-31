@@ -327,6 +327,90 @@ func TestSelectRotatesBeforeCrossingGroupLimit(t *testing.T) {
 	}
 }
 
+func TestGroupDefersAfterAllKeysCool(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}, {Name: "two"}}, 1)
+	for _, name := range []string{"one", "two"} {
+		p.UpdateUsage(name, Usage{Limit: 100}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 1, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := p.Select(now, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(first, 429, time.Hour, now)
+	second, err := p.Select(now, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.group == second.group {
+		t.Fatalf("second lease reused cooling group %d", second.group)
+	}
+	snapshot := p.MonitorSnapshot(now)
+	if !snapshot.Groups[first.group].Deferred || snapshot.Groups[first.group].Spent {
+		t.Fatalf("first group snapshot = %+v, want deferred and not spent", snapshot.Groups[first.group])
+	}
+	if _, err := p.Select(now, 1); !errors.Is(err, ErrGroupRebuildRequired) {
+		t.Fatalf("Select() after terminal groups = %v, want ErrGroupRebuildRequired", err)
+	}
+}
+
+func TestResearchReservationClosesGroupWhenNextRequestDoesNotFit(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}, {Name: "two"}}, 1)
+	for _, name := range []string{"one", "two"} {
+		p.UpdateUsage(name, Usage{Limit: 1000}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 600, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := p.SelectFor(now, Selection{Estimate: 500, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.group == second.group {
+		t.Fatalf("second Research lease reused closed group %d", second.group)
+	}
+	if group := p.MonitorSnapshot(now).Groups[first.group]; !group.Spent || group.RoundUsage != 500 {
+		t.Fatalf("first group snapshot = %+v, want closed with 500 round usage", group)
+	}
+}
+
+func TestResearchQuotaRollbackDoesNotDeferGroup(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}}, 1)
+	p.UpdateUsage("one", Usage{Limit: 1000}, now)
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 600, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	lease, err := p.SelectFor(now, Selection{Estimate: 250, Workload: WorkloadResearch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(lease, 432, 0, now)
+	if group := p.MonitorSnapshot(now).Groups[lease.group]; group.Deferred || group.Spent {
+		t.Fatalf("group after Research 432 = %+v, want neither deferred nor spent", group)
+	}
+}
+
 func TestMonitorSnapshotAggregatesGroupsAndSelectionWeights(t *testing.T) {
 	now := time.Now()
 	keys := []Key{

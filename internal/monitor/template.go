@@ -177,6 +177,7 @@ const pageHTML = `<!doctype html>
     .group-state { color: var(--muted); font-size: 9px; }
     .group-active .group-state { color: var(--accent); }
     .group-spent .group-state { color: var(--ready); }
+    .group-deferred .group-state { color: var(--warn); }
     .group-usage {
       margin-top: 7px;
       color: var(--muted);
@@ -220,6 +221,8 @@ const pageHTML = `<!doctype html>
     .ma-cell.done { background: rgba(119, 210, 173, .1); border-color: rgba(119, 210, 173, .3); }
     .ma-cell.done span { color: var(--ready); }
     .ma-cell.done .ma-fill { position: absolute; inset: 0; background: rgba(119, 210, 173, .22); }
+    .ma-cell.deferred { background: rgba(255, 181, 95, .08); border-color: rgba(255, 181, 95, .3); }
+    .ma-cell.deferred span { color: var(--warn); }
     .ma-cell.now { border-color: var(--accent); }
     .ma-cell.now .ma-fill { position: absolute; top: 0; bottom: 0; left: 0; background: rgba(112, 201, 243, .18); }
     .ma-cell.now span { color: var(--accent); }
@@ -367,7 +370,7 @@ const pageHTML = `<!doctype html>
       <div class="ma-head"><span class="ma-t">本轮轮换</span><span class="ma-v">{{.Rotation.ActiveName}}</span></div>
       <div class="ma-track">
         {{range .Groups}}
-        <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
+        <div class="ma-cell{{if .Spent}} done{{else if .Deferred}} deferred{{else if .Active}} now{{end}}">
           {{if .Spent}}<div class="ma-fill" style="width:100%"></div>{{else if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
           <span>{{if .Spent}}✓{{else}}{{.ShortName}}{{end}}</span>
         </div>
@@ -389,7 +392,7 @@ const pageHTML = `<!doctype html>
           <div class="ma-head"><span class="ma-t">本轮轮换</span><span class="ma-v">{{.Rotation.ActiveName}}</span></div>
           <div class="ma-track">
             {{range .Groups}}
-            <div class="ma-cell{{if .Spent}} done{{else if .Active}} now{{end}}">
+            <div class="ma-cell{{if .Spent}} done{{else if .Deferred}} deferred{{else if .Active}} now{{end}}">
               {{if .Spent}}<div class="ma-fill" style="width:100%"></div>{{else if .Active}}<div class="ma-fill" style="{{.RoundMetrics.ActualWidth}}"></div>{{end}}
               <span>{{if .Spent}}✓{{else}}{{.ShortName}}{{end}}</span>
             </div>
