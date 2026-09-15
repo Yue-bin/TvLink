@@ -241,6 +241,37 @@ func TestRunResearchCancellationKeepsActiveReservation(t *testing.T) {
 	}
 }
 
+func TestRunResearchDefersReconciliationWhileKeyIsThrottled(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"request_id":"research-1","status":"completed","content":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	keyPool := pool.New([]pool.Key{{Name: "one", APIKey: "tvly-one"}}, 1)
+	keyPool.UpdateUsage("one", pool.Usage{Limit: 1000}, time.Now())
+	if err := keyPool.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// The Key was refreshed moments ago, so it sits inside its throttle window.
+	keyPool.RecordRefreshAttempt("one", time.Now(), 0, nil)
+
+	handler := New("tlk-client", upstream.URL, upstream.Client(), keyPool, 1024, time.Hour)
+	refresher := &fakeUsageRefresher{pool: keyPool, used: 73}
+	handler.usage = refresher
+
+	if _, err := handler.RunResearch(context.Background(), []byte(`{"input":"test","model":"mini"}`), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("refresh calls = %v, want the reconciliation deferred to the next slot", refresher.calls)
+	}
+	snapshot := keyPool.Snapshots(time.Now())[0]
+	if snapshot.EstimatedUsage != 110 || snapshot.ResearchReserved != 0 {
+		t.Fatalf("snapshot = %#v, want the settled reservation counted until the next refresh", snapshot)
+	}
+}
+
 type fakeUsageRefresher struct {
 	pool  *pool.Pool
 	used  int64

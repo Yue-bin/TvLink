@@ -194,6 +194,12 @@ func (h *Handler) settleResearch(ctx context.Context, lease pool.Lease) {
 	if h.usage == nil {
 		return
 	}
+	// /usage is throttled per Key; a settled reservation can wait for the Key's
+	// next refresh slot instead of burning a request right now.
+	if !h.pool.Refreshable(lease.Key.Name, time.Now()) {
+		slog.Info("research reservation reconciliation deferred", "key", lease.Key.Name, "reservation", lease.Estimate)
+		return
+	}
 	if err := h.usage.RefreshUsage(ctx, lease.Key.Name); err != nil {
 		slog.Warn("research usage reconciliation failed", "key", lease.Key.Name, "error", err)
 	}
