@@ -127,3 +127,50 @@ func TestNewPageViewShowsGroupTerminalStates(t *testing.T) {
 		t.Errorf("deferred group = %+v, want deferred state", got)
 	}
 }
+
+func TestNewPageViewShowsRefreshAndRoundStatus(t *testing.T) {
+	refreshedAt := time.Date(2026, time.September, 15, 8, 24, 37, 0, time.Local)
+	rebuiltAt := time.Date(2026, time.September, 15, 8, 4, 12, 0, time.Local)
+
+	healthy := newPageView(pool.MonitorSnapshot{
+		Refresh: pool.RefreshStatus{At: refreshedAt},
+	}, time.Now())
+	if !healthy.Status.Visible || healthy.Status.Alert {
+		t.Errorf("healthy status = %+v, want a visible non-alert status", healthy.Status)
+	}
+	if healthy.Status.Refresh != "用量刷新正常 · 09-15 08:24:37" {
+		t.Errorf("healthy refresh text = %q", healthy.Status.Refresh)
+	}
+
+	failed := newPageView(pool.MonitorSnapshot{
+		Refresh: pool.RefreshStatus{
+			At:       refreshedAt,
+			Failures: 10,
+			Error:    "send usage request: Get \"https://api.tavily.com/usage\": context deadline exceeded",
+		},
+	}, time.Now())
+	if !failed.Status.Alert {
+		t.Errorf("failed status = %+v, want an alert", failed.Status)
+	}
+	if failed.Status.Refresh != "用量刷新失败 · 10 个 Key · 09-15 08:24:37" {
+		t.Errorf("failed refresh text = %q", failed.Status.Refresh)
+	}
+	if failed.Status.Note == "" {
+		t.Error("failed status note = empty, want the sweep error")
+	}
+
+	pending := newPageView(pool.MonitorSnapshot{
+		Refresh: pool.RefreshStatus{At: refreshedAt, Pending: true, RebuildAt: rebuiltAt},
+	}, time.Now())
+	if !pending.Status.Alert {
+		t.Errorf("pending status = %+v, want an alert", pending.Status)
+	}
+	if pending.Status.Round != "本轮已无可用组：下一次请求将重建分组（上次重建 09-15 08:04:12）" {
+		t.Errorf("pending round text = %q", pending.Status.Round)
+	}
+
+	empty := newPageView(pool.MonitorSnapshot{}, time.Now())
+	if empty.Status.Visible {
+		t.Errorf("status without any sweep = %+v, want it hidden", empty.Status)
+	}
+}

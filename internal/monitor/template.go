@@ -53,6 +53,25 @@ const pageHTML = `<!doctype html>
     .topbar { margin-bottom: 18px; }
     .identity h1 { margin: 0; font-size: 21px; font-weight: 740; }
     .snapshot { color: var(--muted); font-size: 10px; }
+    .status-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 16px;
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      background: var(--panel-2);
+      border: 1px solid var(--edge);
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .status-alert { border-color: var(--warning); color: var(--warning); }
+    .status-bar code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      word-break: break-all;
+    }
     .summary {
       padding: 18px;
       background: var(--panel);
@@ -339,6 +358,13 @@ const pageHTML = `<!doctype html>
       <div class="identity"><h1>TvLink 用量监控</h1></div>
       <div class="snapshot">数据生成于 {{.GeneratedAt}}</div>
     </header>
+    {{if .Status.Visible}}
+    <div class="status-bar{{if .Status.Alert}} status-alert{{end}}">
+      {{if .Status.Refresh}}<span>{{.Status.Refresh}}</span>{{end}}
+      {{if .Status.Note}}<code>{{.Status.Note}}</code>{{end}}
+      {{if .Status.Round}}<span>{{.Status.Round}}</span>{{end}}
+    </div>
+    {{end}}
     <section class="summary">
       <div class="summary-top">
         <div><div class="eyebrow">总用量</div><div class="usage-number">{{.Total.UsageText}}</div></div>

@@ -61,6 +61,16 @@ type rotationView struct {
 	ActiveName string
 }
 
+// statusView explains why the pool may refuse requests even though Keys look
+// available: a failed usage sweep or a round waiting for its rebuild.
+type statusView struct {
+	Visible bool
+	Alert   bool
+	Refresh string
+	Note    string
+	Round   string
+}
+
 type pageView struct {
 	GeneratedAt        string
 	Total              progressView
@@ -72,6 +82,7 @@ type pageView struct {
 	GroupingEnabled    bool
 	ActiveGroupName    string
 	Rotation           rotationView
+	Status             statusView
 	HasActiveGroup     bool
 	Empty              bool
 }
@@ -85,6 +96,7 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 		GroupingEnabled: snapshot.GroupingEnabled && len(snapshot.Groups) > 0,
 		ActiveGroupName: "--",
 		Empty:           len(snapshot.Keys) == 0,
+		Status:          newStatusView(snapshot.Refresh),
 	}
 	var totalLimit, totalActual int64
 	var totalEstimated, totalRemaining float64
@@ -169,6 +181,43 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 	view.Total = newProgressView(totalActual, totalEstimated, totalLimit)
 	view.ProjectedRemaining = formatFloat(totalRemaining)
 	return view
+}
+
+func newStatusView(refresh pool.RefreshStatus) statusView {
+	view := statusView{Alert: refresh.Error != "" || refresh.Pending}
+	switch {
+	case refresh.Failures > 0:
+		view.Refresh = fmt.Sprintf("用量刷新失败 · %d 个 Key", refresh.Failures)
+	case refresh.Error != "":
+		view.Refresh = "用量刷新失败"
+	case !refresh.At.IsZero():
+		view.Refresh = "用量刷新正常"
+	}
+	if view.Refresh != "" && !refresh.At.IsZero() {
+		view.Refresh += " · " + formatTimestamp(refresh.At)
+	}
+	if refresh.Error != "" {
+		view.Note = oneLineText(refresh.Error)
+	}
+	if refresh.Pending {
+		view.Round = "本轮已无可用组：下一次请求将重建分组"
+		if !refresh.RebuildAt.IsZero() {
+			view.Round += "（上次重建 " + formatTimestamp(refresh.RebuildAt) + "）"
+		}
+	}
+	view.Visible = view.Refresh != "" || view.Note != "" || view.Round != ""
+	return view
+}
+
+// oneLineText flattens a sweep error into a single readable status line.
+func oneLineText(message string) string {
+	const limit = 200
+	flattened := strings.Join(strings.Fields(message), " ")
+	runes := []rune(flattened)
+	if len(runes) <= limit {
+		return flattened
+	}
+	return string(runes[:limit]) + "…"
 }
 
 func newProgressView(actual int64, estimated float64, limit int64) progressView {

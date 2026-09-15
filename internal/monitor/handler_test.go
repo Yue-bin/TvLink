@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"errors"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -99,6 +100,35 @@ func TestHandlerRendersResearchRoutingState(t *testing.T) {
 	New(p).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := html.UnescapeString(response.Body.String())
 	for _, text := range []string{"RESEARCH PAUSED", "Research 预留", "110"} {
+		if !strings.Contains(body, text) {
+			t.Errorf("page does not contain %q", text)
+		}
+	}
+}
+
+func TestHandlerRendersRefreshStatus(t *testing.T) {
+	now := time.Now()
+	p := pool.New([]pool.Key{{Name: "primary-01", APIKey: "tvly-secret"}}, 1)
+	p.UpdateUsage("primary-01", pool.Usage{Limit: 1000, Used: 100}, now)
+	if err := p.ConfigureGroups(pool.GroupConfig{Size: 1, UsageLimit: 1, Location: time.UTC}); err != nil {
+		t.Fatalf("ConfigureGroups() error = %v", err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatalf("RebuildGroups() error = %v", err)
+	}
+	if _, err := p.Select(now, 1); err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	p.RecordRefresh(now, errors.New("send usage request: context deadline exceeded"))
+
+	response := httptest.NewRecorder()
+	New(p).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	body := html.UnescapeString(response.Body.String())
+	for _, text := range []string{
+		"status-bar", "status-alert", "用量刷新失败 · 1 个 Key",
+		"context deadline exceeded", "本轮已无可用组",
+	} {
 		if !strings.Contains(body, text) {
 			t.Errorf("page does not contain %q", text)
 		}
