@@ -123,7 +123,7 @@ func refreshLoop(ctx context.Context, client *tavily.Client, keyPool *pool.Pool,
 					slog.Warn("usage refresh failed", "key", key.Name, "error", err)
 				}
 			}
-			keyPool.RecordRefresh(time.Now(), errors.Join(failures...))
+			keyPool.RecordRefreshBatch(time.Now(), len(keys), errors.Join(failures...))
 		}
 	}
 }

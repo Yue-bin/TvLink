@@ -76,7 +76,7 @@ func (c *Coordinator) refreshAsync(ctx context.Context) {
 		sweepCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshSweepBudget)
 		defer cancel()
 		err := c.refresh(sweepCtx)
-		c.pool.RecordRefresh(time.Now(), err)
+		c.pool.RecordRefreshBatch(time.Now(), 0, err)
 		if err != nil {
 			slog.Warn("usage refresh sweep incomplete", "error", err)
 		}

@@ -113,15 +113,20 @@ type MonitorSnapshot struct {
 	Refresh         RefreshStatus
 }
 
-// RefreshStatus reports the outcome of the last usage-refresh sweep and whether
-// the current round still waits for a rebuild. It lets the monitor explain why
-// the pool refuses requests instead of only listing Key states.
+// RefreshStatus reports the outcome of the last refresh batch, the usage-refresh
+// metrics, and whether the current round still waits for a rebuild. It lets the
+// monitor explain why the pool refuses requests instead of only listing Key
+// states.
 type RefreshStatus struct {
-	At        time.Time
-	Failures  int
-	Error     string
-	RebuildAt time.Time
-	Pending   bool
+	At          time.Time
+	Size        int
+	Failures    int
+	Error       string
+	RebuildAt   time.Time
+	Pending     bool
+	Requests    int
+	MaxBurst    int
+	RateLimited int
 }
 
 // GroupConfig enables optional key-group rotation.
@@ -141,6 +146,8 @@ type keyState struct {
 	state             State
 	retryAt           time.Time
 	researchBlockedAt *float64
+	refreshAt         time.Time
+	refreshFloor      time.Time
 }
 
 type reservation struct {
@@ -159,20 +166,38 @@ type groupState struct {
 
 // Pool synchronizes key allocation, reservations, and circuit state.
 type Pool struct {
-	mu              sync.Mutex
-	keys            map[string]*keyState
-	random          *rand.Rand
-	groupConfig     GroupConfig
-	groups          []groupState
-	activeGroup     int
-	rotationMonth   month
-	reservations    map[uint64]*reservation
-	nextLeaseID     uint64
-	rebuildAt       time.Time
-	refreshAt       time.Time
-	refreshFailures int
-	refreshError    string
+	mu                sync.Mutex
+	keys              map[string]*keyState
+	keyOrder          []string
+	random            *rand.Rand
+	groupConfig       GroupConfig
+	groups            []groupState
+	activeGroup       int
+	rotationMonth     month
+	reservations      map[uint64]*reservation
+	nextLeaseID       uint64
+	rebuildAt         time.Time
+	refreshPeriod     time.Duration
+	refreshBatchAt    time.Time
+	refreshBatchSize  int
+	refreshBatchFails int
+	refreshBatchError string
+	usageRequests     []time.Time
+	usageLimited      []time.Time
+	maxBurst          int
 }
+
+// Refresh throttling constants shared by every /usage entry point.
+const (
+	refreshSlotJitter   = 10 * time.Second
+	refreshRetryBackoff = 2 * time.Minute
+	refreshRateFloor    = 5 * time.Minute
+	refreshSuccessFloor = time.Minute
+	refreshBurstWindow  = time.Minute
+	refreshLimitWindow  = 10 * time.Minute
+	usageRequestHistory = 512
+	usageLimitHistory   = 64
+)
 
 type month struct {
 	year  int
@@ -182,11 +207,14 @@ type month struct {
 // New creates a pool with the provided Tavily credentials.
 func New(keys []Key, seed int64) *Pool {
 	states := make(map[string]*keyState, len(keys))
+	order := make([]string, 0, len(keys))
 	for _, key := range keys {
 		states[key.Name] = &keyState{key: key, state: StatePending}
+		order = append(order, key.Name)
 	}
 	return &Pool{
 		keys:         states,
+		keyOrder:     order,
 		random:       rand.New(rand.NewSource(seed)),
 		activeGroup:  -1,
 		reservations: make(map[uint64]*reservation),
@@ -246,6 +274,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 		p.groups = nil
 		p.activeGroup = -1
 		p.rotationMonth = rotationMonth
+		p.rescheduleRefreshesLocked(now)
 		return nil
 	}
 
@@ -267,6 +296,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 		p.activeGroup = (p.activeGroup + 1) % len(p.groups)
 	}
 	p.rotationMonth = rotationMonth
+	p.rescheduleRefreshesLocked(now)
 	return nil
 }
 
@@ -438,16 +468,165 @@ func (p *Pool) UpdateUsage(name string, usage Usage, fetchedAt time.Time) {
 	}
 }
 
-// RecordRefresh stores the outcome of one usage-refresh sweep for the monitor.
-func (p *Pool) RecordRefresh(at time.Time, err error) {
+// ConfigureRefresh sets the period between two /usage refreshes of one Key.
+func (p *Pool) ConfigureRefresh(period time.Duration) error {
+	if period <= 0 {
+		return fmt.Errorf("usage refresh period must be positive")
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.refreshAt = at
-	p.refreshFailures = refreshFailureCount(err)
-	p.refreshError = ""
+	p.refreshPeriod = period
+	return nil
+}
+
+// RescheduleRefreshes re-lays the refresh slots starting at now. Grouped pools
+// slot by rotation order; ungrouped pools spread Keys by configuration order.
+func (p *Pool) RescheduleRefreshes(now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.rescheduleRefreshesLocked(now)
+}
+
+func (p *Pool) rescheduleRefreshesLocked(now time.Time) {
+	if p.refreshPeriod <= 0 {
+		return
+	}
+	if p.groupConfig != (GroupConfig{}) && len(p.groups) > 0 {
+		spacing := p.refreshPeriod / time.Duration(len(p.groups))
+		for index := range p.groups {
+			offset := time.Duration(index)*spacing + jitterAround(p.random, spacing/10)
+			for name := range p.groups[index].keys {
+				p.scheduleRefreshLocked(name, now.Add(offset+jitterDuration(p.random, refreshSlotJitter)))
+			}
+		}
+		return
+	}
+	spacing := p.refreshPeriod / time.Duration(max(1, len(p.keyOrder)))
+	for index, name := range p.keyOrder {
+		offset := time.Duration(index)*spacing + jitterAround(p.random, spacing/10)
+		p.scheduleRefreshLocked(name, now.Add(offset+jitterDuration(p.random, refreshSlotJitter)))
+	}
+}
+
+func (p *Pool) scheduleRefreshLocked(name string, wish time.Time) {
+	state, ok := p.keys[name]
+	if !ok {
+		return
+	}
+	at := wish
+	if state.refreshFloor.After(at) {
+		at = state.refreshFloor
+	}
+	state.refreshAt = at
+}
+
+// DueKeys returns the Keys whose refresh time has arrived plus the duration
+// until the next Key becomes due.
+func (p *Pool) DueKeys(now time.Time) ([]Key, time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.refreshPeriod <= 0 {
+		return nil, time.Minute
+	}
+	due := make([]Key, 0, 4)
+	var next time.Duration
+	for _, name := range p.keyOrder {
+		state := p.keys[name]
+		if state.refreshAt.IsZero() || !state.refreshAt.After(now) {
+			due = append(due, state.key)
+			continue
+		}
+		if wait := state.refreshAt.Sub(now); next == 0 || wait < next {
+			next = wait
+		}
+	}
+	if next < time.Second {
+		next = time.Second
+	}
+	if next > 30*time.Second {
+		next = 30 * time.Second
+	}
+	return due, next
+}
+
+// Refreshable reports whether a /usage attempt for the Key is allowed now.
+func (p *Pool) Refreshable(name string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	state, ok := p.keys[name]
+	if !ok {
+		return false
+	}
+	return !state.refreshAt.After(now)
+}
+
+// RecordRefreshAttempt notes one /usage attempt outcome, advances the Key's
+// throttle, and updates the refresh metrics.
+func (p *Pool) RecordRefreshAttempt(name string, at time.Time, retryAfter time.Duration, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	state, ok := p.keys[name]
+	if !ok {
+		return
+	}
+	switch {
+	case err == nil:
+		state.refreshFloor = at.Add(refreshSuccessFloor)
+		if p.refreshPeriod > 0 {
+			state.refreshAt = at.Add(p.refreshPeriod + jitterDuration(p.random, refreshSlotJitter))
+		} else {
+			state.refreshAt = time.Time{}
+		}
+	case retryAfter > 0:
+		backoff := max(retryAfter, refreshRateFloor)
+		state.refreshFloor = at.Add(backoff)
+		state.refreshAt = at.Add(backoff)
+	default:
+		state.refreshFloor = at.Add(refreshRetryBackoff)
+		state.refreshAt = at.Add(refreshRetryBackoff)
+	}
+	p.noteUsageRequestLocked(at, retryAfter > 0)
+}
+
+func (p *Pool) noteUsageRequestLocked(at time.Time, rateLimited bool) {
+	p.usageRequests = append(p.usageRequests, at)
+	if excess := len(p.usageRequests) - usageRequestHistory; excess > 0 {
+		p.usageRequests = p.usageRequests[excess:]
+	}
+	burst := 0
+	for index := len(p.usageRequests) - 1; index >= 0; index-- {
+		if at.Sub(p.usageRequests[index]) > refreshBurstWindow {
+			break
+		}
+		burst++
+	}
+	if burst > p.maxBurst {
+		p.maxBurst = burst
+	}
+	if rateLimited {
+		p.usageLimited = append(p.usageLimited, at)
+		if excess := len(p.usageLimited) - usageLimitHistory; excess > 0 {
+			p.usageLimited = p.usageLimited[excess:]
+		}
+	}
+}
+
+// RecordRefreshBatch stores the outcome of one refresh batch for the monitor.
+func (p *Pool) RecordRefreshBatch(at time.Time, size int, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.refreshBatchAt = at
+	p.refreshBatchSize = size
+	p.refreshBatchFails = refreshFailureCount(err)
+	p.refreshBatchError = ""
 	if err != nil {
-		p.refreshError = err.Error()
+		p.refreshBatchError = err.Error()
 	}
 }
 
@@ -461,6 +640,17 @@ func refreshFailureCount(err error) int {
 		return len(joined.Unwrap())
 	}
 	return 1
+}
+
+func jitterDuration(random *rand.Rand, maximum time.Duration) time.Duration {
+	if maximum <= 0 {
+		return 0
+	}
+	return time.Duration(random.Int63n(int64(maximum)))
+}
+
+func jitterAround(random *rand.Rand, span time.Duration) time.Duration {
+	return jitterDuration(random, 2*span) - span
 }
 
 // Key returns one configured credential by name.
@@ -673,17 +863,35 @@ func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
 	if p.activeGroup >= 0 && p.activeGroup < len(p.groups) {
 		activeGroup = p.activeGroup + 1
 	}
+	requests := 0
+	if p.refreshPeriod > 0 {
+		for _, at := range p.usageRequests {
+			if now.Sub(at) <= p.refreshPeriod {
+				requests++
+			}
+		}
+	}
+	rateLimited := 0
+	for _, at := range p.usageLimited {
+		if now.Sub(at) <= refreshLimitWindow {
+			rateLimited++
+		}
+	}
 	return MonitorSnapshot{
 		Keys:            keys,
 		Groups:          groups,
 		GroupingEnabled: groupingEnabled,
 		ActiveGroup:     activeGroup,
 		Refresh: RefreshStatus{
-			At:        p.refreshAt,
-			Failures:  p.refreshFailures,
-			Error:     p.refreshError,
-			RebuildAt: p.rebuildAt,
-			Pending:   groupingEnabled && p.allGroupsTerminal(),
+			At:          p.refreshBatchAt,
+			Size:        p.refreshBatchSize,
+			Failures:    p.refreshBatchFails,
+			Error:       p.refreshBatchError,
+			RebuildAt:   p.rebuildAt,
+			Pending:     groupingEnabled && p.allGroupsTerminal(),
+			Requests:    requests,
+			MaxBurst:    p.maxBurst,
+			RateLimited: rateLimited,
 		},
 	}
 }

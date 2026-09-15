@@ -623,13 +623,13 @@ func TestMonitorSnapshotReportsRefreshAndRebuildStatus(t *testing.T) {
 		t.Errorf("refresh status = %+v, want no failure before any sweep", status)
 	}
 
-	p.RecordRefresh(later, errors.Join(errors.New("one failed"), errors.New("two failed")))
+	p.RecordRefreshBatch(later, 2, errors.Join(errors.New("one failed"), errors.New("two failed")))
 	status = p.MonitorSnapshot(later).Refresh
-	if status.Failures != 2 || status.Error == "" || !status.At.Equal(later) {
-		t.Errorf("refresh status = %+v, want two recorded Key failures", status)
+	if status.Size != 2 || status.Failures != 2 || status.Error == "" || !status.At.Equal(later) {
+		t.Errorf("refresh status = %+v, want two recorded Key failures in a batch of two", status)
 	}
 
-	p.RecordRefresh(later.Add(time.Minute), nil)
+	p.RecordRefreshBatch(later.Add(time.Minute), 2, nil)
 	if status = p.MonitorSnapshot(later).Refresh; status.Failures != 0 || status.Error != "" {
 		t.Errorf("refresh status = %+v, want a successful sweep to clear the failure", status)
 	}
@@ -639,6 +639,171 @@ func TestMonitorSnapshotReportsRefreshAndRebuildStatus(t *testing.T) {
 	}
 	if status = p.MonitorSnapshot(later).Refresh; status.Pending {
 		t.Errorf("Pending = true after a rebuild, want false: %+v", status)
+	}
+}
+
+func TestRefreshSlotsStaggerByGroup(t *testing.T) {
+	now := time.Now()
+	names := []string{"one", "two", "three", "four"}
+	keys := make([]Key, 0, len(names))
+	for _, name := range names {
+		keys = append(keys, Key{Name: name})
+	}
+	p := New(keys, 1)
+	for _, name := range names {
+		p.UpdateUsage(name, Usage{Limit: 100}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 2, UsageLimit: 10, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	// 槽 0 的偏移上限是 10% 槽距（3m）+ 10s 槽内抖动，此后它的两个 Key 必然到期。
+	due, wait := p.DueKeys(now.Add(3*time.Minute + 11*time.Second))
+	if len(due) != 2 {
+		t.Fatalf("due keys at slot 0 = %d, want 2", len(due))
+	}
+	if wait <= 0 || wait > 30*time.Second {
+		t.Fatalf("wait = %v, want within (0, 30s]", wait)
+	}
+	for _, key := range due {
+		p.RecordRefreshAttempt(key.Name, now.Add(3*time.Minute+11*time.Second), 0, nil)
+	}
+
+	// 槽 1 最早在 30m - 3m = 27m，10 分钟时不应有到期 Key。
+	if due, _ = p.DueKeys(now.Add(10 * time.Minute)); len(due) != 0 {
+		t.Fatalf("due keys at +10m = %d, want 0", len(due))
+	}
+	// 槽 1 最晚在 30m + 3m + 10s，35 分钟时必然到期。
+	if due, _ = p.DueKeys(now.Add(35 * time.Minute)); len(due) != 2 {
+		t.Fatalf("due keys at +35m = %d, want 2", len(due))
+	}
+}
+
+func TestRefreshSlotsSpreadWithoutGroups(t *testing.T) {
+	now := time.Now()
+	names := []string{"one", "two", "three", "four"}
+	keys := make([]Key, 0, len(names))
+	for _, name := range names {
+		keys = append(keys, Key{Name: name})
+	}
+	p := New(keys, 1)
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	p.RescheduleRefreshes(now)
+
+	// 槽距 15m（±1.5m）：起始只有第一把 Key 到期。
+	due, _ := p.DueKeys(now.Add(time.Second))
+	if len(due) != 1 {
+		t.Fatalf("due keys at start = %d, want 1", len(due))
+	}
+	p.RecordRefreshAttempt(due[0].Name, now.Add(time.Second), 0, nil)
+	if due, _ = p.DueKeys(now.Add(13 * time.Minute)); len(due) != 0 {
+		t.Fatalf("due keys at +13m = %d, want 0", len(due))
+	}
+	if due, _ = p.DueKeys(now.Add(17 * time.Minute)); len(due) != 1 {
+		t.Fatalf("due keys at +17m = %d, want 1", len(due))
+	}
+}
+
+func TestRecordRefreshAttemptThrottle(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}}, 1)
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	p.RecordRefreshAttempt("one", now, 0, nil)
+	if at := p.keys["one"].refreshAt; at.Before(now.Add(time.Hour)) || at.After(now.Add(time.Hour+refreshSlotJitter)) {
+		t.Fatalf("success refreshAt = %v, want now+period+[0,10s)", at)
+	}
+	if p.Refreshable("one", now) {
+		t.Error("Refreshable right after a success = true, want false")
+	}
+	if !p.Refreshable("one", now.Add(time.Hour+refreshSlotJitter)) {
+		t.Error("Refreshable after the period = false, want true")
+	}
+
+	p.RecordRefreshAttempt("one", now, 0, errors.New("send usage request: timeout"))
+	if at := p.keys["one"].refreshAt; !at.Equal(now.Add(refreshRetryBackoff)) {
+		t.Fatalf("failure refreshAt = %v, want now+2m", at)
+	}
+
+	p.RecordRefreshAttempt("one", now, time.Minute, errors.New("rate limited"))
+	if at := p.keys["one"].refreshAt; !at.Equal(now.Add(refreshRateFloor)) {
+		t.Fatalf("429 refreshAt = %v, want now+max(Retry-After,300s)", at)
+	}
+	p.RecordRefreshAttempt("one", now, 20*time.Minute, errors.New("rate limited"))
+	if at := p.keys["one"].refreshAt; !at.Equal(now.Add(20 * time.Minute)) {
+		t.Fatalf("429 refreshAt = %v, want now+20m when Retry-After is longer", at)
+	}
+}
+
+func TestRescheduleKeepsThrottleFloor(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}, {Name: "two"}}, 1)
+	for _, name := range []string{"one", "two"} {
+		p.UpdateUsage(name, Usage{Limit: 100}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 10, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	p.RecordRefreshAttempt("one", now, time.Minute, errors.New("rate limited"))
+	if err := p.RebuildGroups(now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if at := p.keys["one"].refreshAt; at.Before(now.Add(refreshRateFloor)) {
+		t.Fatalf("refreshAt after rebuild = %v, want the throttle floor preserved", at)
+	}
+}
+
+func TestRefreshMetricsWindows(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}, {Name: "two"}}, 1)
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	p.RecordRefreshAttempt("one", now.Add(-90*time.Minute), 0, nil)
+	p.RecordRefreshAttempt("two", now.Add(-30*time.Minute), 0, nil)
+	p.RecordRefreshAttempt("one", now.Add(-5*time.Minute), time.Minute, errors.New("rate limited"))
+
+	status := p.MonitorSnapshot(now).Refresh
+	if status.Requests != 2 {
+		t.Errorf("Requests = %d, want 2 within the last period", status.Requests)
+	}
+	if status.RateLimited != 1 {
+		t.Errorf("RateLimited = %d, want 1 within the last 10 minutes", status.RateLimited)
+	}
+	if status.MaxBurst != 1 {
+		t.Errorf("MaxBurst = %d, want 1 for isolated requests", status.MaxBurst)
+	}
+
+	p.RecordRefreshAttempt("one", now.Add(-2*time.Minute), 0, nil)
+	p.RecordRefreshAttempt("two", now.Add(-2*time.Minute+5*time.Second), 0, nil)
+	if status = p.MonitorSnapshot(now).Refresh; status.MaxBurst != 2 {
+		t.Errorf("MaxBurst = %d, want 2 for requests 5s apart", status.MaxBurst)
+	}
+}
+
+func TestDueKeysRequiresConfiguredPeriod(t *testing.T) {
+	now := time.Now()
+	p := New([]Key{{Name: "one"}}, 1)
+	if due, wait := p.DueKeys(now); due != nil || wait != time.Minute {
+		t.Fatalf("DueKeys() = (%v, %v), want no schedule before ConfigureRefresh", due, wait)
 	}
 }
 

@@ -119,7 +119,7 @@ func TestHandlerRendersRefreshStatus(t *testing.T) {
 	if _, err := p.Select(now, 1); err != nil {
 		t.Fatalf("Select() error = %v", err)
 	}
-	p.RecordRefresh(now, errors.New("send usage request: context deadline exceeded"))
+	p.RecordRefreshBatch(now, 1, errors.New("send usage request: context deadline exceeded"))
 
 	response := httptest.NewRecorder()
 	New(p).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
