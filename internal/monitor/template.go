@@ -362,6 +362,7 @@ const pageHTML = `<!doctype html>
     <div class="status-bar{{if .Status.Alert}} status-alert{{end}}">
       {{if .Status.Refresh}}<span>{{.Status.Refresh}}</span>{{end}}
       {{if .Status.Note}}<code>{{.Status.Note}}</code>{{end}}
+      {{if .Status.Metrics}}<span>{{.Status.Metrics}}</span>{{end}}
       {{if .Status.Round}}<span>{{.Status.Round}}</span>{{end}}
     </div>
     {{end}}

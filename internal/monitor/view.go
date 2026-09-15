@@ -62,12 +62,14 @@ type rotationView struct {
 }
 
 // statusView explains why the pool may refuse requests even though Keys look
-// available: a failed usage sweep or a round waiting for its rebuild.
+// available: a failed refresh batch, a throttled usage endpoint, or a round
+// waiting for its rebuild.
 type statusView struct {
 	Visible bool
 	Alert   bool
 	Refresh string
 	Note    string
+	Metrics string
 	Round   string
 }
 
@@ -184,8 +186,12 @@ func newPageView(snapshot pool.MonitorSnapshot, now time.Time) pageView {
 }
 
 func newStatusView(refresh pool.RefreshStatus) statusView {
-	view := statusView{Alert: refresh.Error != "" || refresh.Pending}
+	view := statusView{Alert: refresh.Error != "" || refresh.Pending || refresh.RateLimited > 0}
 	switch {
+	case refresh.Failures > 0 && refresh.Size > 0:
+		view.Refresh = fmt.Sprintf("用量刷新失败 · %d/%d 个 Key", refresh.Failures, refresh.Size)
+	case refresh.Size > 0:
+		view.Refresh = fmt.Sprintf("用量刷新正常 · %d 个 Key", refresh.Size)
 	case refresh.Failures > 0:
 		view.Refresh = fmt.Sprintf("用量刷新失败 · %d 个 Key", refresh.Failures)
 	case refresh.Error != "":
@@ -199,13 +205,17 @@ func newStatusView(refresh pool.RefreshStatus) statusView {
 	if refresh.Error != "" {
 		view.Note = oneLineText(refresh.Error)
 	}
+	if refresh.Requests > 0 || refresh.MaxBurst > 0 || refresh.RateLimited > 0 {
+		view.Metrics = fmt.Sprintf("近周期请求 %d · 最大连发 %d · 近 10 分钟 429 ×%d",
+			refresh.Requests, refresh.MaxBurst, refresh.RateLimited)
+	}
 	if refresh.Pending {
 		view.Round = "本轮已无可用组：下一次请求将重建分组"
 		if !refresh.RebuildAt.IsZero() {
 			view.Round += "（上次重建 " + formatTimestamp(refresh.RebuildAt) + "）"
 		}
 	}
-	view.Visible = view.Refresh != "" || view.Note != "" || view.Round != ""
+	view.Visible = view.Refresh != "" || view.Note != "" || view.Metrics != "" || view.Round != ""
 	return view
 }
 

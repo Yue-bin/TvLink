@@ -119,6 +119,10 @@ func TestHandlerRendersRefreshStatus(t *testing.T) {
 	if _, err := p.Select(now, 1); err != nil {
 		t.Fatalf("Select() error = %v", err)
 	}
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatalf("ConfigureRefresh() error = %v", err)
+	}
+	p.RecordRefreshAttempt("primary-01", now, 0, errors.New("send usage request: context deadline exceeded"))
 	p.RecordRefreshBatch(now, 1, errors.New("send usage request: context deadline exceeded"))
 
 	response := httptest.NewRecorder()
@@ -126,8 +130,9 @@ func TestHandlerRendersRefreshStatus(t *testing.T) {
 
 	body := html.UnescapeString(response.Body.String())
 	for _, text := range []string{
-		"status-bar", "status-alert", "用量刷新失败 · 1 个 Key",
+		"status-bar", "status-alert", "用量刷新失败 · 1/1 个 Key",
 		"context deadline exceeded", "本轮已无可用组",
+		"近周期请求 1 · 最大连发 1 · 近 10 分钟 429 ×0",
 	} {
 		if !strings.Contains(body, text) {
 			t.Errorf("page does not contain %q", text)

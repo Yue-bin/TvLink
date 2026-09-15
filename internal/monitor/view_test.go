@@ -174,3 +174,42 @@ func TestNewPageViewShowsRefreshAndRoundStatus(t *testing.T) {
 		t.Errorf("status without any sweep = %+v, want it hidden", empty.Status)
 	}
 }
+
+func TestNewPageViewShowsSlotResultAndRefreshMetrics(t *testing.T) {
+	refreshedAt := time.Date(2026, time.September, 15, 10, 15, 0, 0, time.Local)
+
+	slot := newPageView(pool.MonitorSnapshot{
+		Refresh: pool.RefreshStatus{At: refreshedAt, Size: 3, Requests: 10, MaxBurst: 3},
+	}, time.Now())
+	if slot.Status.Refresh != "用量刷新正常 · 3 个 Key · 09-15 10:15:00" {
+		t.Errorf("slot refresh text = %q", slot.Status.Refresh)
+	}
+	if slot.Status.Metrics != "近周期请求 10 · 最大连发 3 · 近 10 分钟 429 ×0" {
+		t.Errorf("slot metrics = %q", slot.Status.Metrics)
+	}
+	if slot.Status.Alert {
+		t.Errorf("slot status = %+v, want no alert for a healthy slot", slot.Status)
+	}
+
+	partial := newPageView(pool.MonitorSnapshot{
+		Refresh: pool.RefreshStatus{
+			At:       refreshedAt,
+			Size:     3,
+			Failures: 1,
+			Error:    "send usage request: context deadline exceeded",
+		},
+	}, time.Now())
+	if partial.Status.Refresh != "用量刷新失败 · 1/3 个 Key · 09-15 10:15:00" {
+		t.Errorf("partial refresh text = %q", partial.Status.Refresh)
+	}
+
+	throttled := newPageView(pool.MonitorSnapshot{
+		Refresh: pool.RefreshStatus{At: refreshedAt, Size: 3, Requests: 12, MaxBurst: 4, RateLimited: 2},
+	}, time.Now())
+	if !throttled.Status.Alert {
+		t.Errorf("throttled status = %+v, want an alert while /usage returns 429", throttled.Status)
+	}
+	if throttled.Status.Metrics != "近周期请求 12 · 最大连发 4 · 近 10 分钟 429 ×2" {
+		t.Errorf("throttled metrics = %q", throttled.Status.Metrics)
+	}
+}
