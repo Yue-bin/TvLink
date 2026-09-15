@@ -608,6 +608,70 @@ func newEqualCapacityGroupPool(t *testing.T, names []string, now time.Time) *Poo
 	return p
 }
 
+func TestMonitorSnapshotReportsRefreshAndRebuildStatus(t *testing.T) {
+	now := time.Now()
+	p, later := terminalGroupPool(t, now)
+
+	status := p.MonitorSnapshot(later).Refresh
+	if !status.Pending {
+		t.Errorf("Pending = false, want true while every group is terminal")
+	}
+	if status.RebuildAt.IsZero() {
+		t.Error("RebuildAt is zero, want the last group rebuild time")
+	}
+	if status.Failures != 0 || status.Error != "" {
+		t.Errorf("refresh status = %+v, want no failure before any sweep", status)
+	}
+
+	p.RecordRefresh(later, errors.Join(errors.New("one failed"), errors.New("two failed")))
+	status = p.MonitorSnapshot(later).Refresh
+	if status.Failures != 2 || status.Error == "" || !status.At.Equal(later) {
+		t.Errorf("refresh status = %+v, want two recorded Key failures", status)
+	}
+
+	p.RecordRefresh(later.Add(time.Minute), nil)
+	if status = p.MonitorSnapshot(later).Refresh; status.Failures != 0 || status.Error != "" {
+		t.Errorf("refresh status = %+v, want a successful sweep to clear the failure", status)
+	}
+
+	if err := p.RebuildGroups(later); err != nil {
+		t.Fatal(err)
+	}
+	if status = p.MonitorSnapshot(later).Refresh; status.Pending {
+		t.Errorf("Pending = true after a rebuild, want false: %+v", status)
+	}
+}
+
+// terminalGroupPool returns a pool whose every group is terminal while both
+// Keys are still usable, plus the time at which the first Key's Retry-After has
+// elapsed. This is the state captured during the 2026-09-15 outage.
+func terminalGroupPool(t *testing.T, now time.Time) (*Pool, time.Time) {
+	t.Helper()
+	p := New([]Key{{Name: "one"}, {Name: "two"}}, 1)
+	for _, name := range []string{"one", "two"} {
+		p.UpdateUsage(name, Usage{Limit: 10, Used: 0}, now)
+	}
+	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 2, Location: time.UTC}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RebuildGroups(now); err != nil {
+		t.Fatal(err)
+	}
+
+	cooled, err := p.Select(now, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Resolve(cooled, 429, time.Minute, now)
+	if _, err := p.Select(now, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.SelectFor(now, Selection{Estimate: 2}); !errors.Is(err, ErrGroupRebuildRequired) {
+		t.Fatalf("SelectFor() with every group terminal = %v, want ErrGroupRebuildRequired", err)
+	}
+	return p, now.Add(2 * time.Minute)
+}
+
 func groupRemaining(groups []groupState) []float64 {
 	remaining := make([]float64, len(groups))
 	for index, group := range groups {

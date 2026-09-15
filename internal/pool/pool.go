@@ -110,6 +110,18 @@ type MonitorSnapshot struct {
 	Groups          []GroupSnapshot
 	GroupingEnabled bool
 	ActiveGroup     int
+	Refresh         RefreshStatus
+}
+
+// RefreshStatus reports the outcome of the last usage-refresh sweep and whether
+// the current round still waits for a rebuild. It lets the monitor explain why
+// the pool refuses requests instead of only listing Key states.
+type RefreshStatus struct {
+	At        time.Time
+	Failures  int
+	Error     string
+	RebuildAt time.Time
+	Pending   bool
 }
 
 // GroupConfig enables optional key-group rotation.
@@ -147,15 +159,19 @@ type groupState struct {
 
 // Pool synchronizes key allocation, reservations, and circuit state.
 type Pool struct {
-	mu            sync.Mutex
-	keys          map[string]*keyState
-	random        *rand.Rand
-	groupConfig   GroupConfig
-	groups        []groupState
-	activeGroup   int
-	rotationMonth month
-	reservations  map[uint64]*reservation
-	nextLeaseID   uint64
+	mu              sync.Mutex
+	keys            map[string]*keyState
+	random          *rand.Rand
+	groupConfig     GroupConfig
+	groups          []groupState
+	activeGroup     int
+	rotationMonth   month
+	reservations    map[uint64]*reservation
+	nextLeaseID     uint64
+	rebuildAt       time.Time
+	refreshAt       time.Time
+	refreshFailures int
+	refreshError    string
 }
 
 type month struct {
@@ -211,6 +227,7 @@ func (p *Pool) RebuildGroups(now time.Time) error {
 	if p.groupConfig == (GroupConfig{}) {
 		return nil
 	}
+	p.rebuildAt = now
 	rotationMonth := monthOf(now, p.groupConfig.Location)
 	keys := make([]*keyState, 0, len(p.keys))
 	for _, state := range p.keys {
@@ -419,6 +436,31 @@ func (p *Pool) UpdateUsage(name string, usage Usage, fetchedAt time.Time) {
 	if state.state == StatePending || state.state == StateExhausted {
 		state.state = StateReady
 	}
+}
+
+// RecordRefresh stores the outcome of one usage-refresh sweep for the monitor.
+func (p *Pool) RecordRefresh(at time.Time, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.refreshAt = at
+	p.refreshFailures = refreshFailureCount(err)
+	p.refreshError = ""
+	if err != nil {
+		p.refreshError = err.Error()
+	}
+}
+
+// refreshFailureCount counts the Keys whose usage refresh failed in one sweep.
+func refreshFailureCount(err error) int {
+	if err == nil {
+		return 0
+	}
+	var joined interface{ Unwrap() []error }
+	if errors.As(err, &joined) {
+		return len(joined.Unwrap())
+	}
+	return 1
 }
 
 // Key returns one configured credential by name.
@@ -636,6 +678,13 @@ func (p *Pool) MonitorSnapshot(now time.Time) MonitorSnapshot {
 		Groups:          groups,
 		GroupingEnabled: groupingEnabled,
 		ActiveGroup:     activeGroup,
+		Refresh: RefreshStatus{
+			At:        p.refreshAt,
+			Failures:  p.refreshFailures,
+			Error:     p.refreshError,
+			RebuildAt: p.rebuildAt,
+			Pending:   groupingEnabled && p.allGroupsTerminal(),
+		},
 	}
 }
 
