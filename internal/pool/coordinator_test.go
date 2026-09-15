@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,8 +48,15 @@ func TestCoordinatorPreservesResearchExclusionsAcrossRebuild(t *testing.T) {
 	if err := p.RebuildGroups(now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Select(now, 1); err != nil {
-		t.Fatal(err)
+	// Spend every group so the coordinator has to rebuild the round, and keep
+	// both Keys usable: reservations are estimates, not real Tavily usage.
+	for range keys {
+		if _, err := p.Select(now, 1); err != nil {
+			t.Fatalf("Select() while spending every group = %v", err)
+		}
+	}
+	if _, err := p.Select(now, 1); !errors.Is(err, ErrGroupRebuildRequired) {
+		t.Fatalf("Select() with every group spent = %v, want ErrGroupRebuildRequired", err)
 	}
 
 	coordinator := NewCoordinator(p, func(context.Context) error {
