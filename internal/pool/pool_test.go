@@ -819,6 +819,9 @@ func terminalGroupPool(t *testing.T, now time.Time) (*Pool, time.Time) {
 	if err := p.ConfigureGroups(GroupConfig{Size: 1, UsageLimit: 2, Location: time.UTC}); err != nil {
 		t.Fatal(err)
 	}
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.RebuildGroups(now); err != nil {
 		t.Fatal(err)
 	}
@@ -834,7 +837,8 @@ func terminalGroupPool(t *testing.T, now time.Time) (*Pool, time.Time) {
 	if _, err := p.SelectFor(now, Selection{Estimate: 2}); !errors.Is(err, ErrGroupRebuildRequired) {
 		t.Fatalf("SelectFor() with every group terminal = %v, want ErrGroupRebuildRequired", err)
 	}
-	return p, now.Add(2 * time.Minute)
+	// 槽 0 的偏移上限是 10% 槽距（30m 槽距下为 3m）再加 10s 槽内抖动。
+	return p, now.Add(4 * time.Minute)
 }
 
 func groupRemaining(groups []groupState) []float64 {

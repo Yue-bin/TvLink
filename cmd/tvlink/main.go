@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -48,11 +47,17 @@ func main() {
 	usageClient := tavily.NewClient("https://api.tavily.com", &http.Client{Timeout: 20 * time.Second}, keyPool, keys)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	for _, key := range keys {
-		if err := usageClient.RefreshUsage(ctx, key.Name); err != nil {
-			slog.Warn("initial usage refresh failed", "key", key.Name, "error", err)
-		}
+	if err := keyPool.ConfigureRefresh(settings.UsageRefreshInterval); err != nil {
+		slog.Error("configure usage refresh", "error", err)
+		os.Exit(1)
 	}
+	// The startup sweep is the one deliberate burst: it makes every Key usable
+	// immediately and seeds each Key's refresh throttle.
+	refreshErr := usageClient.Refresh(ctx, keys)
+	if refreshErr != nil {
+		slog.Warn("initial usage refresh incomplete", "error", refreshErr)
+	}
+	keyPool.RecordRefreshBatch(time.Now(), len(keys), refreshErr)
 	if settings.GroupingEnabled() {
 		location, _ := time.LoadLocation(settings.GroupRotationTimezone)
 		if err := keyPool.ConfigureGroups(pool.GroupConfig{Size: settings.KeyGroupSize, UsageLimit: settings.GroupUsageLimit, Location: location}); err != nil {
@@ -63,10 +68,12 @@ func main() {
 			slog.Error("build key groups", "error", err)
 			os.Exit(1)
 		}
+	} else {
+		keyPool.RescheduleRefreshes(time.Now())
 	}
-	go refreshLoop(ctx, usageClient, keyPool, keys, settings.UsageRefreshInterval)
+	go refreshLoop(ctx, usageClient, keyPool)
 
-	selector := pool.NewCoordinator(keyPool, usageClient.RefreshAll)
+	selector := pool.NewCoordinator(keyPool, usageClient.Refresh)
 	rest := proxy.NewWithCoordinator(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, selector, usageClient, int64(settings.RequestBodyLimit), settings.ResearchMappingTTL)
 	mux := http.NewServeMux()
 	mux.Handle("/", monitor.New(keyPool))
@@ -108,22 +115,23 @@ func writeVersion(writer io.Writer) {
 	_, _ = fmt.Fprintf(writer, "TvLink %s\n", version)
 }
 
-func refreshLoop(ctx context.Context, client *tavily.Client, keyPool *pool.Pool, keys []pool.Key, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+// refreshLoop refreshes Keys as their refresh slots arrive. The pool owns the
+// schedule: it hands back the Keys due now plus how long to wait for the next
+// one, so jitter, throttling, and rebuild reschedules all stay in one place.
+func refreshLoop(ctx context.Context, client *tavily.Client, keyPool *pool.Pool) {
 	for {
+		due, wait := keyPool.DueKeys(time.Now())
+		if len(due) > 0 {
+			err := client.Refresh(ctx, due)
+			keyPool.RecordRefreshBatch(time.Now(), len(due), err)
+			if err != nil {
+				slog.Warn("usage refresh failed", "keys", len(due), "error", err)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			var failures []error
-			for _, key := range keys {
-				if err := client.RefreshUsage(ctx, key.Name); err != nil {
-					failures = append(failures, err)
-					slog.Warn("usage refresh failed", "key", key.Name, "error", err)
-				}
-			}
-			keyPool.RecordRefreshBatch(time.Now(), len(keys), errors.Join(failures...))
+		case <-time.After(wait):
 		}
 	}
 }

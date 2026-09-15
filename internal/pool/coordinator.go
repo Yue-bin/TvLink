@@ -13,8 +13,8 @@ import (
 // endpoint cannot keep it open indefinitely.
 const refreshSweepBudget = 30 * time.Second
 
-// UsageRefresher refreshes every configured key before a group rebuild.
-type UsageRefresher func(context.Context) error
+// UsageRefresher refreshes the given keys and reports any failed refresh.
+type UsageRefresher func(context.Context, []Key) error
 
 // Coordinator serializes usage refreshes and group rebuilds for request paths.
 type Coordinator struct {
@@ -65,20 +65,25 @@ func (c *Coordinator) SelectFor(ctx context.Context, now time.Time, selection Se
 }
 
 // refreshAsync converges usage data without blocking the request that triggered
-// a rebuild. The sweep runs on a detached context so a client that gives up
-// early cannot abort it half way through the Keys.
+// a rebuild. Only Keys whose throttle has elapsed are refreshed, so a rebuild
+// storm cannot turn into a burst of /usage requests. The sweep runs on a
+// detached context so a client that gives up early cannot abort it half way.
 func (c *Coordinator) refreshAsync(ctx context.Context) {
 	if c.refresh == nil || !c.refreshing.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
 		defer c.refreshing.Store(false)
+		due, _ := c.pool.DueKeys(time.Now())
+		if len(due) == 0 {
+			return
+		}
 		sweepCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshSweepBudget)
 		defer cancel()
-		err := c.refresh(sweepCtx)
-		c.pool.RecordRefreshBatch(time.Now(), 0, err)
+		err := c.refresh(sweepCtx, due)
+		c.pool.RecordRefreshBatch(time.Now(), len(due), err)
 		if err != nil {
-			slog.Warn("usage refresh sweep incomplete", "error", err)
+			slog.Warn("usage refresh sweep incomplete", "keys", len(due), "error", err)
 		}
 	}()
 }
