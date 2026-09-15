@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -63,7 +64,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	go refreshLoop(ctx, usageClient, keys, settings.UsageRefreshInterval)
+	go refreshLoop(ctx, usageClient, keyPool, keys, settings.UsageRefreshInterval)
 
 	selector := pool.NewCoordinator(keyPool, usageClient.RefreshAll)
 	rest := proxy.NewWithCoordinator(settings.TvLinkAPIKey, "https://api.tavily.com", &http.Client{Transport: http.DefaultTransport}, keyPool, selector, usageClient, int64(settings.RequestBodyLimit), settings.ResearchMappingTTL)
@@ -107,7 +108,7 @@ func writeVersion(writer io.Writer) {
 	_, _ = fmt.Fprintf(writer, "TvLink %s\n", version)
 }
 
-func refreshLoop(ctx context.Context, client *tavily.Client, keys []pool.Key, interval time.Duration) {
+func refreshLoop(ctx context.Context, client *tavily.Client, keyPool *pool.Pool, keys []pool.Key, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -115,11 +116,14 @@ func refreshLoop(ctx context.Context, client *tavily.Client, keys []pool.Key, in
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			var failures []error
 			for _, key := range keys {
 				if err := client.RefreshUsage(ctx, key.Name); err != nil {
+					failures = append(failures, err)
 					slog.Warn("usage refresh failed", "key", key.Name, "error", err)
 				}
 			}
+			keyPool.RecordRefresh(time.Now(), errors.Join(failures...))
 		}
 	}
 }
