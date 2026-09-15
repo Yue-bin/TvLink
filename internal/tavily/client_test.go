@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,75 @@ func TestRefreshUsageReturnsRetryAfter(t *testing.T) {
 	err := client.RefreshUsage(context.Background(), "one")
 	if retryAfter, ok := RetryAfter(err); !ok || retryAfter != time.Minute {
 		t.Fatalf("RetryAfter() = (%s, %t), want (1m0s, true)", retryAfter, ok)
+	}
+}
+
+func TestRefreshUsageRecordsAttemptsInPool(t *testing.T) {
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"key":{"usage":12,"limit":null},"account":{"plan_usage":12,"plan_limit":100,"paygo_usage":0,"paygo_limit":null}}`))
+	}))
+	defer healthy.Close()
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer limited.Close()
+
+	keys := []pool.Key{{Name: "one", APIKey: "tvly-one"}}
+	p := pool.New(keys, 1)
+	if err := p.ConfigureRefresh(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewClient(healthy.URL, healthy.Client(), p, keys)
+	if err := client.RefreshUsage(context.Background(), "one"); err != nil {
+		t.Fatalf("RefreshUsage() error = %v", err)
+	}
+	if status := p.MonitorSnapshot(time.Now()).Refresh; status.Requests != 1 || status.RateLimited != 0 {
+		t.Fatalf("metrics after a success = %+v, want 1 request and no rate limit", status)
+	}
+	if p.Refreshable("one", time.Now()) {
+		t.Error("Key is refreshable right after a success, want it throttled")
+	}
+
+	throttled := NewClient(limited.URL, limited.Client(), p, keys)
+	if _, ok := RetryAfter(throttled.RefreshUsage(context.Background(), "one")); !ok {
+		t.Fatal("RefreshUsage() did not report throttling")
+	}
+	if status := p.MonitorSnapshot(time.Now()).Refresh; status.Requests != 2 || status.RateLimited != 1 {
+		t.Fatalf("metrics after 429 = %+v, want 2 requests and 1 rate limit", status)
+	}
+	if p.Refreshable("one", time.Now().Add(time.Minute)) {
+		t.Error("Key is refreshable inside the 429 backoff, want it throttled")
+	}
+	if !p.Refreshable("one", time.Now().Add(5*time.Minute+time.Second)) {
+		t.Error("Key is not refreshable after the 429 backoff")
+	}
+}
+
+func TestRefreshReportsEachKeyFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer tvly-two" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"key":{"usage":1,"limit":null},"account":{"plan_usage":1,"plan_limit":100}}`))
+	}))
+	defer server.Close()
+
+	keys := []pool.Key{{Name: "one", APIKey: "tvly-one"}, {Name: "two", APIKey: "tvly-two"}}
+	p := pool.New(keys, 1)
+	client := NewClient(server.URL, server.Client(), p, keys)
+	err := client.Refresh(context.Background(), keys)
+	if err == nil || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("Refresh() error = %v, want the failing Key reported", err)
+	}
+	snapshots := p.Snapshots(time.Now())
+	if snapshots[0].RealUsage != 1 {
+		t.Errorf("healthy Key snapshot = %+v, want the successful refresh applied", snapshots[0])
+	}
+	if snapshots[1].RealUsage != 0 {
+		t.Errorf("failed Key snapshot = %+v, want no usage recorded", snapshots[1])
 	}
 }
 

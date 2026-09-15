@@ -63,6 +63,17 @@ func (c *Client) RefreshAll(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
+// Refresh refreshes the given keys and reports any failed refresh.
+func (c *Client) Refresh(ctx context.Context, keys []pool.Key) error {
+	var failures []error
+	for _, key := range keys {
+		if err := c.RefreshUsage(ctx, key.Name); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
 // NewClient creates a Tavily usage client.
 func NewClient(baseURL string, httpClient *http.Client, keyPool *pool.Pool, keys []pool.Key) *Client {
 	configured := make(map[string]pool.Key, len(keys))
@@ -77,40 +88,48 @@ func NewClient(baseURL string, httpClient *http.Client, keyPool *pool.Pool, keys
 	}
 }
 
-// RefreshUsage refreshes one key's authoritative Tavily usage snapshot.
+// RefreshUsage refreshes one key's authoritative Tavily usage snapshot. Every
+// attempt — success, throttling, or failure — is reported to the pool so the
+// Key's refresh throttle and the monitor metrics stay accurate.
 func (c *Client) RefreshUsage(ctx context.Context, name string) error {
 	key, ok := c.keys[name]
 	if !ok {
 		return fmt.Errorf("unknown Tavily key %q", name)
 	}
+	record := func(retryAfter time.Duration, err error) error {
+		c.pool.RecordRefreshAttempt(name, time.Now(), retryAfter, err)
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/usage", nil)
 	if err != nil {
-		return fmt.Errorf("build usage request: %w", err)
+		return record(0, fmt.Errorf("build usage request: %w", err))
 	}
 	req.Header.Set("Authorization", "Bearer "+key.APIKey)
 
 	response, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("send usage request: %w", err)
+		return record(0, fmt.Errorf("send usage request: %w", err))
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusTooManyRequests {
-		return retryAfterError{duration: parseRetryAfter(response.Header.Get("Retry-After"), time.Now())}
+		retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), time.Now())
+		return record(retryAfter, retryAfterError{duration: retryAfter})
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("usage request returned %s", response.Status)
+		return record(0, fmt.Errorf("usage request returned %s", response.Status))
 	}
 
 	var payload usageResponse
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return fmt.Errorf("decode usage response: %w", err)
+		return record(0, fmt.Errorf("decode usage response: %w", err))
 	}
 	limit, used, err := effectiveUsage(payload)
 	if err != nil {
-		return fmt.Errorf("usage response for %q: %w", name, err)
+		return record(0, fmt.Errorf("usage response for %q: %w", name, err))
 	}
-	c.pool.UpdateUsage(name, pool.Usage{Limit: limit, Used: used}, time.Now())
-	return nil
+	fetchedAt := time.Now()
+	c.pool.UpdateUsage(name, pool.Usage{Limit: limit, Used: used}, fetchedAt)
+	return record(0, nil)
 }
 
 func effectiveUsage(payload usageResponse) (int64, int64, error) {
